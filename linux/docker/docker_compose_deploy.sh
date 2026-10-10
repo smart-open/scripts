@@ -11,6 +11,12 @@
 
 set -e
 
+# Bash-only (uses declare -A, [[ ]], <(...)); guard against `sh script.sh`
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "Error: this script requires bash. Run: bash $0 ... (or ./$0)" >&2
+    exit 1
+fi
+
 VERSION="2.0"
 BASE_DIR="${HOME}/docker-stack"
 DATA_DIR="${BASE_DIR}/data"
