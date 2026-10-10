@@ -2330,15 +2330,15 @@ cmd_restart() {
 resolve_services() {
     local name="$1"
     local prefixes="${SERVICE_PREFIXES[$name]:-$name}"
-    local matched="" svc p
-    while read -r svc; do
-        [ -z "$svc" ] && continue
+    local matched="" svc p all
+    all=$(cd "$BASE_DIR" && docker compose --env-file .env config --services 2>/dev/null) || true
+    for svc in $all; do
         for p in $prefixes; do
             if [[ "$svc" == "$p"* ]] && [[ " $matched " != *" $svc "* ]]; then
                 matched="$matched $svc"
             fi
         done
-    done < <(cd "$BASE_DIR" && docker compose --env-file .env config --services 2>/dev/null)
+    done
     echo "${matched# }"
 }
 
