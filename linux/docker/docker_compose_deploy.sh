@@ -1,7 +1,7 @@
 #!/bin/bash
 # Docker Compose Infrastructure Deployer
 # Deploy common dev/test infrastructure components via docker-compose
-# Supports: Redis, MySQL, PostgreSQL, MinIO, RustFS, Elasticsearch, MongoDB, Nacos,
+# Supports: Redis, MySQL, PostgreSQL, pgvector, MinIO, RustFS, Elasticsearch, MongoDB, Nacos,
 #   OpenResty, RabbitMQ, Kafka, RocketMQ, ZooKeeper, Pulsar, Kong,
 #   OpenSearch, SkyWalking, Prometheus, Grafana, Loki, Logstash, Kibana,
 #   Keycloak, XXL-Job, PowerJob, Sentinel Dashboard
@@ -31,6 +31,7 @@ declare -A COMPONENTS=(
     ["redis"]="redis:8.0-alpine"
     ["mysql"]="mysql:8.4"
     ["postgresql"]="postgres:17-alpine"
+    ["pgvector"]="pgvector/pgvector:pg17"
     ["minio"]="minio/minio:RELEASE.2025-10-15T17-29-55Z"
     ["elasticsearch"]="docker.elastic.co/elasticsearch/elasticsearch:8.19.16"
     ["mongodb"]="mongo:8.0"
@@ -61,6 +62,7 @@ declare -A DESCRIPTIONS=(
     ["redis"]="Redis 8.0 - In-memory cache/message broker"
     ["mysql"]="MySQL 8.4 LTS - Relational database"
     ["postgresql"]="PostgreSQL 17 - Advanced relational database"
+    ["pgvector"]="pgvector 0.8 (PG 17) - Vector similarity search database"
     ["minio"]="MinIO - S3-compatible object storage"
     ["elasticsearch"]="Elasticsearch 8.19 - Search & analytics engine"
     ["mongodb"]="MongoDB 8.0 - Document database"
@@ -91,6 +93,7 @@ declare -A CATEGORIES=(
     ["redis"]="Cache/MQ"
     ["mysql"]="Database"
     ["postgresql"]="Database"
+    ["pgvector"]="Database"
     ["mongodb"]="Database"
     ["elasticsearch"]="Search"
     ["opensearch"]="Search"
@@ -121,6 +124,7 @@ declare -A PORTS=(
     ["redis"]="6379"
     ["mysql"]="3306"
     ["postgresql"]="5432"
+    ["pgvector"]="5435:5432"
     ["minio"]="9000:9000 9001:9001"
     ["elasticsearch"]="9200:9200 9300:9300"
     ["mongodb"]="27017"
@@ -164,6 +168,38 @@ XXLJOB_USER="admin"
 XXLJOB_PASS="123456"
 RUSTFS_ACCESS_KEY="rustfs"
 RUSTFS_SECRET_KEY="Rustfs123!"
+
+# Compose service name prefixes per component (for per-service start/stop/restart/remove)
+# Cluster modes generate multiple services (e.g. kafka1/kafka2/kafka3, es-node1..3, pg-primary/replica)
+declare -A SERVICE_PREFIXES=(
+    ["redis"]="redis"
+    ["mysql"]="mysql"
+    ["postgresql"]="postgresql pg-"
+    ["pgvector"]="pgvector"
+    ["mongodb"]="mongodb mongo"
+    ["minio"]="minio"
+    ["elasticsearch"]="elasticsearch es-"
+    ["kibana"]="kibana"
+    ["logstash"]="logstash"
+    ["nacos"]="nacos"
+    ["openresty"]="openresty"
+    ["rabbitmq"]="rabbitmq"
+    ["kafka"]="kafka"
+    ["rocketmq"]="rocketmq"
+    ["zookeeper"]="zookeeper"
+    ["pulsar"]="pulsar"
+    ["kong"]="kong"
+    ["opensearch"]="opensearch"
+    ["skywalking"]="skywalking"
+    ["prometheus"]="prometheus"
+    ["grafana"]="grafana"
+    ["loki"]="loki"
+    ["keycloak"]="keycloak"
+    ["xxljob"]="xxl-job"
+    ["powerjob"]="powerjob"
+    ["sentinel"]="sentinel"
+    ["rustfs"]="rustfs"
+)
 
 # Network
 NETWORK_NAME="docker-stack-net"
@@ -582,6 +618,26 @@ gen_postgresql_ha() {
       - pg-primary
     volumes:
       - pg-replica-data:/var/lib/postgresql/data
+    networks:
+      - docker-stack-net
+EOF
+}
+
+gen_pgvector() {
+    cat << 'EOF'
+
+  pgvector:
+    image: pgvector/pgvector:pg17
+    container_name: pgvector
+    restart: unless-stopped
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASS}
+      POSTGRES_DB: appdb
+      TZ: Asia/Shanghai
+    volumes:
+      - pgvector-data:/var/lib/postgresql/data
     networks:
       - docker-stack-net
 EOF
@@ -1889,6 +1945,10 @@ EOF
                 add_volume "pg-primary-data"
                 add_volume "pg-replica-data"
                 ;;
+            pgvector)
+                gen_pgvector >> "$COMPOSE_FILE"
+                add_volume "pgvector-data"
+                ;;
             mongodb)
                 gen_mongodb >> "$COMPOSE_FILE"
                 add_volume "mongodb-data"
@@ -2132,7 +2192,7 @@ cmd_deploy() {
         echo " 16. skywalking     17. prometheus     18. grafana"
         echo " 19. loki           20. logstash      21. kibana"
         echo " 22. keycloak       23. xxljob        24. powerjob"
-        echo " 25. sentinel       26. rustfs"
+        echo " 25. sentinel       26. rustfs        27. pgvector"
         echo ""
         echo "Presets:"
         echo "  a. dev-minimal    (redis, mysql, minio)"
@@ -2260,6 +2320,57 @@ cmd_restart() {
     ok "Services restarted"
 }
 
+# Map a component name (or exact compose service name) to deployed service names
+resolve_services() {
+    local name="$1"
+    local prefixes="${SERVICE_PREFIXES[$name]:-$name}"
+    local matched="" svc p
+    while read -r svc; do
+        [ -z "$svc" ] && continue
+        for p in $prefixes; do
+            if [[ "$svc" == "$p"* ]] && [[ " $matched " != *" $svc "* ]]; then
+                matched="$matched $svc"
+            fi
+        done
+    done < <(cd "$BASE_DIR" && docker compose --env-file .env config --services 2>/dev/null)
+    echo "${matched# }"
+}
+
+cmd_service() {
+    local action="$1"
+    local name="$2"
+    if [ -z "$name" ]; then
+        error "Usage: $0 $action <component|service>  (omit name to affect the whole stack)"
+        exit 1
+    fi
+    check_docker
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        error "docker-compose.yml not found. Run '$0 deploy' first."
+        exit 1
+    fi
+    local services
+    services=$(resolve_services "$name")
+    if [ -z "$services" ]; then
+        error "No deployed service matched: $name"
+        info "Deployed stack services: $(cd "$BASE_DIR" && docker compose --env-file .env config --services | tr '\n' ' ')"
+        exit 1
+    fi
+    info "$action: $services"
+    cd "$BASE_DIR"
+    case "$action" in
+        start)   docker compose --env-file .env up -d $services ;;
+        stop)    docker compose --env-file .env stop $services ;;
+        restart) docker compose --env-file .env restart $services ;;
+        remove)  read -p "Remove containers of [$services]? Data volumes are kept. Continue? [y/N] " confirm
+                 if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+                     info "Cancelled"
+                     exit 0
+                 fi
+                 docker compose --env-file .env rm -sf $services ;;
+    esac
+    ok "Done: $action $services"
+}
+
 cmd_status() {
     if [ ! -f "$COMPOSE_FILE" ]; then
         error "docker-compose.yml not found."
@@ -2323,6 +2434,7 @@ cmd_info() {
     echo "Redis:        password=$REDIS_PASS"
     echo "MySQL:        root/$MYSQL_ROOT_PASS"
     echo "PostgreSQL:   postgres/$POSTGRES_PASS"
+    echo "pgvector:     postgres/$POSTGRES_PASS (port 5435, run CREATE EXTENSION vector in your DB)"
     echo "MongoDB:      root/$MONGO_ROOT_PASS"
     echo "MinIO:        $MINIO_ROOT_USER/$MINIO_ROOT_PASS"
     echo "Elasticsearch: elastic/$ES_PASS"
@@ -2343,14 +2455,20 @@ Usage: $0 <command> [arguments]
 Commands:
   list              List all available components
   deploy [comps]    Deploy selected components (interactive if not specified)
-  up                Start all services
-  down              Stop all services
-  restart           Restart all services
+  up [component]    Start all services, or one component (e.g. up redis)
+  stop [component]  Stop all services, or one component (e.g. stop kafka)
+  restart [component] Restart all services, or one component (e.g. restart mysql)
+  remove <component>  Remove one component's containers (volumes kept, e.g. remove nacos)
   status            Show service status
   logs [service]    View logs (follow mode)
   info              Show deployment info and credentials
   clean             Remove all containers and data volumes
   help              Show this help
+
+Per-service operations accept a component name (redis, kafka, xxljob, ...) and
+automatically cover all its nodes in cluster/HA modes (e.g. kafka -> kafka1 kafka2 kafka3).
+An exact compose service name (e.g. es-node2) also works.
+Note: starting a component may also start its depends_on services.
 
 Component format:
   redis              Redis standalone (default)
@@ -2373,6 +2491,7 @@ Component format:
   elasticsearch:cluster Elasticsearch cluster (3 nodes)
   postgresql         PostgreSQL standalone (default)
   postgresql:ha      PostgreSQL primary-replica (1 primary + 1 replica, repmgr)
+  pgvector           pgvector (PostgreSQL 17 + vector extension, port 5435)
   nacos              Nacos standalone (default)
   nacos:cluster      Nacos cluster (3 nodes, embedded raft)
   minio              MinIO standalone (default)
@@ -2400,6 +2519,9 @@ Examples:
   $0 deploy postgresql:ha,opensearch:cluster,keycloak:cluster
   $0 deploy              # Interactive mode
   $0 up
+  $0 stop redis                      # stop only redis (all its nodes in cluster mode)
+  $0 restart kafka                   # cluster nodes too: kafka1 kafka2 kafka3
+  $0 remove nacos                    # remove nacos containers, keep data
   $0 logs redis
   $0 info
   $0 clean
@@ -2417,13 +2539,14 @@ print_banner
 case "${1:-help}" in
     list|ls)       cmd_list ;;
     deploy|create) shift; cmd_deploy "$@" ;;
-    up|start)      cmd_up ;;
-    down|stop)     cmd_down ;;
-    restart)       cmd_restart ;;
+    up|start)      shift; if [ -n "${1:-}" ]; then cmd_service start "$1"; else cmd_up; fi ;;
+    down|stop)     shift; if [ -n "${1:-}" ]; then cmd_service stop "$1"; else cmd_down; fi ;;
+    restart)       shift; if [ -n "${1:-}" ]; then cmd_service restart "$1"; else cmd_restart; fi ;;
+    remove)        shift; cmd_service remove "${1:-}" ;;
     status|ps)     cmd_status ;;
     logs)          shift; cmd_logs "$@" ;;
     info)          cmd_info ;;
-    clean|remove)  cmd_clean ;;
+    clean)         cmd_clean ;;
     help|--help|-h) cmd_help ;;
     *)             error "Unknown command: $1"; echo ""; cmd_help; exit 1 ;;
 esac
