@@ -1,9 +1,14 @@
 # Strip filename from path (Linux dirname style)
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
+    [Parameter(Position = 0)]
     [string]$Path
 )
 
+if (-not $Path) {
+    Write-Host "Usage: dirname PATH"
+    exit 2
+}
+
 $dir = Split-Path $Path -Parent
-if ($dir -eq "") { $dir = "." }
-$dir
+if (-not $dir) { $dir = "." }
+Write-Output $dir

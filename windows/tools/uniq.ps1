@@ -1,38 +1,53 @@
 # Remove consecutive duplicate lines (Linux uniq style)
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
+    [Parameter(Position = 0)]
     [string]$File,
     [switch]$c,
     [switch]$d,
-    [switch]$u
+    [switch]$u,
+    [Parameter(ValueFromPipeline = $true)]
+    [object[]]$InputObject
 )
 
-$lines = Get-Content $File
-$prev = $null
-$count = 0
-
-foreach ($line in $lines) {
-    if ($line -eq $prev) {
-        $count++
-    } else {
-        if ($prev -ne $null) {
-            if ($d -and $count -gt 1) { Write-Host $prev }
-            elseif ($u -and $count -eq 1) { Write-Host $prev }
-            elseif (-not $d -and -not $u) {
-                if ($c) { Write-Host "    $count $prev" }
-                else { Write-Host $prev }
-            }
+begin { $script:piped = @() }
+process { if ($InputObject) { $script:piped += $InputObject } }
+end {
+    if ($script:piped.Count -gt 0) {
+        $lines = @($script:piped)
+    } elseif ($File) {
+        try {
+            $lines = @(Get-Content -LiteralPath $File -ErrorAction Stop)
+        } catch {
+            Write-Host "uniq: cannot open '$File': $($_.Exception.Message)"
+            exit 1
         }
-        $prev = $line
-        $count = 1
+    } else {
+        Write-Host "Usage: uniq [-c] [-d] [-u] [FILE]"
+        Write-Host "   or: <command> | uniq [-c] [-d] [-u]"
+        exit 2
     }
-}
 
-if ($prev -ne $null) {
-    if ($d -and $count -gt 1) { Write-Host $prev }
-    elseif ($u -and $count -eq 1) { Write-Host $prev }
-    elseif (-not $d -and -not $u) {
-        if ($c) { Write-Host "    $count $prev" }
-        else { Write-Host $prev }
+    $groups = @()
+    $prev = $null
+    $count = 0
+    foreach ($line in $lines) {
+        if ($null -ne $prev -and $line -ceq $prev) {
+            $count++
+        } else {
+            if ($null -ne $prev) { $groups += [PSCustomObject]@{ Count = $count; Text = $prev } }
+            $prev = $line
+            $count = 1
+        }
+    }
+    if ($null -ne $prev) { $groups += [PSCustomObject]@{ Count = $count; Text = $prev } }
+
+    foreach ($g in $groups) {
+        $show = if ($d) { $g.Count -gt 1 }
+                elseif ($u) { $g.Count -eq 1 }
+                else { $true }
+        if ($show) {
+            if ($c) { Write-Output ("{0,7} {1}" -f $g.Count, $g.Text) }
+            else { Write-Output $g.Text }
+        }
     }
 }

@@ -43,16 +43,19 @@ if ($h) {
     $pageFreeFmt = [math]::Round($pageFree / 1KB)
 }
 
-[PSCustomObject]@{
-    Type = "Mem"
-    Total = $totalFmt
-    Used = $usedFmt
-    Free = $freeFmt
-}
+$result = @(
+    [PSCustomObject]@{
+        Type = "Mem"
+        Total = $totalFmt
+        Used = $usedFmt
+        Free = $freeFmt
+    },
+    [PSCustomObject]@{
+        Type = "Swap"
+        Total = $pageTotalFmt
+        Used = $pageUsedFmt
+        Free = $pageFreeFmt
+    }
+)
 
-[PSCustomObject]@{
-    Type = "Swap"
-    Total = $pageTotalFmt
-    Used = $pageUsedFmt
-    Free = $pageFreeFmt
-} | Format-Table -AutoSize
+$result | Format-Table -AutoSize

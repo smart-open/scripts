@@ -10,8 +10,20 @@ param(
 )
 
 if ([string]::IsNullOrEmpty($OutFile)) {
-    $OutFile = Split-Path $Url -Leaf
+    try {
+        $uri = [Uri]$Url
+        $leaf = Split-Path $uri.AbsolutePath -Leaf
+        if ([string]::IsNullOrEmpty($leaf)) { $leaf = "download.html" }
+        $OutFile = $leaf
+    } catch {
+        $OutFile = (Split-Path $Url -Leaf) -replace '\?.*$', ''
+    }
 }
 
-Invoke-WebRequest -Uri $Url -OutFile $OutFile
-Write-Host "Downloaded: $Url -> $OutFile"
+try {
+    Invoke-WebRequest -Uri $Url -OutFile $OutFile -ErrorAction Stop
+    Write-Host "Downloaded: $Url -> $OutFile"
+} catch {
+    Write-Host "wget: download failed: $($_.Exception.Message)"
+    exit 1
+}

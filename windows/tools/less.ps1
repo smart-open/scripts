@@ -1,7 +1,17 @@
 # Page through text (Linux less style, using more)
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
+    [Parameter(Position = 0)]
     [string]$File
 )
 
-Get-Content $File | Out-Host -Paging
+if (-not $File) {
+    Write-Host "Usage: less FILE"
+    exit 2
+}
+
+try {
+    Get-Content -LiteralPath $File -ErrorAction Stop | Out-Host -Paging
+} catch {
+    Write-Host "less: cannot open '$File': $($_.Exception.Message)"
+    exit 1
+}

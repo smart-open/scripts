@@ -1,15 +1,28 @@
 # Display file contents (Linux cat style)
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
-    [string]$File,
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+    [string[]]$File,
     [switch]$n
 )
 
-if ($n) {
-    $i = 1
-    Get-Content $File | ForEach-Object {
-        Write-Host ("{0,6}  {1}" -f $i++, $_)
+if (-not $File -or $File.Count -eq 0) {
+    Write-Host "Usage: cat [-n] FILE [FILE...]"
+    exit 2
+}
+
+foreach ($f in $File) {
+    try {
+        $lines = @(Get-Content -LiteralPath $f -ErrorAction Stop)
+    } catch {
+        Write-Host "cat: cannot open '$f': $($_.Exception.Message)"
+        exit 1
     }
-} else {
-    Get-Content $File
+    if ($n) {
+        $i = 1
+        foreach ($line in $lines) {
+            Write-Output ("{0,6}`t{1}" -f $i++, $line)
+        }
+    } else {
+        Write-Output $lines
+    }
 }

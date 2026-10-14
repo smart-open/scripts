@@ -8,27 +8,33 @@ param(
 )
 
 function Show-Tree {
-    param($dir, $prefix = "", $level = 0)
-    
-    if ($Level -gt 0 -and $level -ge $Level) { return }
-    
-    $items = Get-ChildItem -Path $dir -Force:$a
+    param([string]$dir, [string]$prefix = "", [int]$depth = 0)
+
+    if ($Level -gt 0 -and $depth -ge $Level) { return }
+
+    $items = @(Get-ChildItem -LiteralPath $dir -Force:$a -ErrorAction SilentlyContinue)
     $count = $items.Count
     $i = 0
-    
+
     foreach ($item in $items) {
         $i++
         $isLast = $i -eq $count
         $connector = if ($isLast) { "`\-- " } else { "|-- " }
         $itemPath = if ($f) { $item.FullName } else { $item.Name }
-        Write-Host "$prefix$connector$itemPath"
-        
+        Write-Output "$prefix$connector$itemPath"
+
         if ($item.PSIsContainer) {
             $newPrefix = if ($isLast) { "$prefix    " } else { "$prefix|   " }
-            Show-Tree $item.FullName $newPrefix ($level + 1)
+            Show-Tree $item.FullName $newPrefix ($depth + 1)
         }
     }
 }
 
-Write-Host $Path
-Show-Tree $Path
+$root = Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue
+if (-not $root) {
+    Write-Host "tree: path not found: $Path"
+    exit 1
+}
+
+Write-Output $root.Path
+Show-Tree $root.Path

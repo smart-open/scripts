@@ -8,11 +8,11 @@ Write-Host "Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host ""
 
 $os = Get-CimInstance Win32_OperatingSystem
-$cpu = Get-CimInstance Win32_Processor
+$cpuLoad = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
 $memTotal = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)
 $memUsed = [math]::Round(($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / 1MB, 2)
 
-Write-Host "CPU: $($cpu.LoadPercentage)%"
+Write-Host "CPU: $cpuLoad%"
 Write-Host "Memory: $memUsed GB / $memTotal GB"
 Write-Host ""
 

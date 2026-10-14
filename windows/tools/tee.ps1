@@ -1,17 +1,21 @@
-# Read from standard input and write to standard output and files (Linux tee style)
+# Write piped input to file and stdout (Linux tee style)
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
+    [Parameter(Position = 0)]
     [string]$File,
     [switch]$a,
     [Parameter(ValueFromPipeline = $true)]
-    [string]$Input
+    [object[]]$InputObject
 )
 
 begin {
-    $encoding = if ($a) { "Append" } else { "Create" }
+    if (-not $File) {
+        Write-Host "Usage: <command> | tee [-a] FILE"
+        exit 2
+    }
 }
 
 process {
+    if ($null -eq $_) { return }
     $_ | Out-File -FilePath $File -Encoding UTF8 -Append:$a
     $_
 }

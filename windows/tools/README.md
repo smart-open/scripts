@@ -241,6 +241,14 @@ ps | grep chrome                     # 对命令输出（对象）按文本匹�
 - 所有命令均使用 PowerShell 脚本实现，无需安装额外软件
 - 支持常见的 Linux 风格参数
 - 由于 PowerShell 限制，部分功能与原版 Linux 命令可能略有差异
+- **管道友好**：数据输出统一走标准输出（Write-Output），文本类命令支持管道串联，例如：
+  ```powershell
+  cat app.log | grep -i error | sort | uniq -c
+  Get-Content a.txt | cut -d , -f 1-2 | sort -u
+  Get-Content b.txt | head -n 5 | wc -l
+  tree | grep log
+  ```
+- **统一退出码**：0 = 成功，1 = 执行失败（如文件不存在），2 = 用法错误；缺参数时打印 Usage 并退出，不再进入交互式提示（适合脚本/CI 调用）
 
 ## 实现状态
 
@@ -258,6 +266,7 @@ ps | grep chrome                     # 对命令输出（对象）按文本匹�
 - 重启终端后才能使用新命令
 - 某些命令需要管理员权限（如 netstat -b）
 - htop 的交互式功能较为简化，仅支持刷新和退出
-- awk 仅支持基础的字段打印，不支持复杂模式匹配
+- awk 仅支持基础的字段打印（`print $1` 等会被转换为 `Write-Output`），不支持复杂模式匹配
+- `find -Name` 为通配符匹配（Linux 语义），如 `find . -Name *.log`；不解析正则
 - grep 不支持 `-A/-B/-C` 上下文行与 `--color`；Windows PowerShell 5.1 下无 BOM 的 UTF-8 文件按系统 ANSI 代码页读取（PowerShell 7 无此问题）
 - ifconfig 不显示网关/DNS（Linux 原版也不显示），接口名使用 Windows 名称（如 `WLAN`、`以太网`）

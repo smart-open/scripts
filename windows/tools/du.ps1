@@ -15,13 +15,15 @@ function Format-Size($bytes) {
 }
 
 if ($s) {
-    $total = (Get-ChildItem -Path $Path -Recurse -File | Measure-Object Length -Sum).Sum
-    if ($h) { Write-Host "$(Format-Size $total) $Path" }
-    else { Write-Host "$total $Path" }
+    $total = (Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+    if ($null -eq $total) { $total = 0 }
+    if ($h) { Write-Output "$(Format-Size $total) $Path" }
+    else { Write-Output "$total $Path" }
 } else {
-    Get-ChildItem -Path $Path -Directory -Depth $d | ForEach-Object {
+    Get-ChildItem -Path $Path -Directory -Depth $d -ErrorAction SilentlyContinue | ForEach-Object {
         $size = (Get-ChildItem -Path $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-        if ($h) { Write-Host "$(Format-Size $size) $($_.FullName)" }
-        else { Write-Host "$size $($_.FullName)" }
+        if ($null -eq $size) { $size = 0 }
+        if ($h) { Write-Output "$(Format-Size $size) $($_.FullName)" }
+        else { Write-Output "$size $($_.FullName)" }
     }
 }

@@ -1,15 +1,31 @@
 # Find command path (Linux which style)
 param(
-    [Parameter(Mandatory = $true, Position = 0)]
+    [Parameter(Position = 0)]
     [string]$Command
 )
 
-$env:Path -split ";" | ForEach-Object {
-    $path = $_
-    @(".exe", ".cmd", ".bat", ".ps1", ".com") | ForEach-Object {
-        $fullPath = Join-Path $path "$Command$_"
-        if (Test-Path $fullPath) { Write-Host $fullPath }
-    }
-    $fullPath = Join-Path $path $Command
-    if (Test-Path $fullPath -PathType Leaf) { Write-Host $fullPath }
+if (-not $Command) {
+    Write-Host "Usage: which COMMAND"
+    exit 2
 }
+
+$found = $false
+$extensions = @(".com", ".exe", ".bat", ".cmd", ".ps1")
+
+$env:Path -split ";" | Where-Object { $_ } | ForEach-Object {
+    $dir = $_
+    foreach ($ext in $extensions) {
+        $fullPath = Join-Path $dir "$Command$ext"
+        if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
+            Write-Output $fullPath
+            $found = $true
+        }
+    }
+    $fullPath = Join-Path $dir $Command
+    if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
+        Write-Output $fullPath
+        $found = $true
+    }
+}
+
+if (-not $found) { exit 1 }

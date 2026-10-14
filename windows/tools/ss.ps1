@@ -3,14 +3,31 @@ param(
     [switch]$t,
     [switch]$u,
     [switch]$l,
-    [switch]$n
+    [switch]$p
 )
 
-$params = @()
-if ($t -or $u) {
-    if ($t) { $params += "-p", "tcp" }
-    if ($u) { $params += "-p", "udp" }
+# -u : UDP sockets
+if ($u) {
+    Get-NetUDPConnection -ErrorAction SilentlyContinue |
+        Select-Object @{n = 'Proto'; e = { 'udp' } }, LocalAddress, LocalPort, RemoteAddress, RemotePort, State, OwningProcess
+    exit 0
 }
-if ($l) { $params += "-a" }
 
-Get-NetTCPConnection @params | Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, State, OwningProcess | Format-Table -AutoSize
+# TCP sockets
+$params = @{}
+if ($t) { $params['Protocol'] = 'Tcp' }
+if ($l) { $params['State'] = 'Listen' }
+
+$conns = Get-NetTCPConnection @params -ErrorAction SilentlyContinue
+
+$result = $conns | Select-Object @{n = 'Proto'; e = { 'tcp' } }, LocalAddress, LocalPort, RemoteAddress, RemotePort, State, OwningProcess
+
+# -p : resolve process names
+if ($p) {
+    $result = $result | ForEach-Object {
+        $proc = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
+        $_ | Select-Object *, @{n = 'Process'; e = { if ($proc) { $proc.ProcessName } else { '?' } } }
+    }
+}
+
+$result

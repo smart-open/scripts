@@ -7,5 +7,5 @@ param(
 if ($Name) {
     [Environment]::GetEnvironmentVariable($Name)
 } else {
-    Get-ChildItem Env: | ForEach-Object { Write-Host "$($_.Name)=$($_.Value)" }
+    Get-ChildItem Env: | ForEach-Object { Write-Output "$($_.Name)=$($_.Value)" }
 }
