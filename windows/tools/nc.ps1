@@ -1,7 +1,7 @@
 # Network utility (Linux nc/netcat style - simplified)
 param(
     [Parameter(Position = 0)]
-    [string]$Host,
+    [string]$TargetHost,
     [Parameter(Position = 1)]
     [int]$Port,
     [switch]$z,
@@ -9,17 +9,17 @@ param(
     [int]$Timeout = 3000
 )
 
-if ($z -and $Host -and $Port) {
-    Write-Host "Checking $Host:$Port..."
+if ($z -and $TargetHost -and $Port) {
+    Write-Host "Checking ${TargetHost}:$Port..."
     $tcp = New-Object System.Net.Sockets.TcpClient
     try {
-        $connect = $tcp.BeginConnect($Host, $Port, $null, $null)
+        $connect = $tcp.BeginConnect($TargetHost, $Port, $null, $null)
         $wait = $connect.AsyncWaitHandle.WaitOne($Timeout, $false)
         if ($wait -and $tcp.Connected) {
-            Write-Host "Connection to $Host $Port [tcp/*] succeeded!"
+            Write-Host "Connection to $TargetHost $Port [tcp/*] succeeded!"
             exit 0
         } else {
-            Write-Host "Connection to $Host $Port [tcp/*] failed!"
+            Write-Host "Connection to $TargetHost $Port [tcp/*] failed!"
             exit 1
         }
     } finally {
