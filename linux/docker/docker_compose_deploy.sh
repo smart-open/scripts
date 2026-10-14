@@ -3,7 +3,7 @@
 # Deploy common dev/test infrastructure components via docker-compose
 # Supports: Redis, MySQL, PostgreSQL, pgvector, MinIO, RustFS, Elasticsearch, MongoDB, Nacos,
 #   OpenResty, RabbitMQ, Kafka, RocketMQ, ZooKeeper, Pulsar, Kong,
-#   OpenSearch, SkyWalking, Prometheus, Grafana, Loki, Logstash, Kibana,
+#   OpenSearch, SkyWalking, Prometheus, Alertmanager, Grafana, Loki, Promtail, Logstash, Kibana,
 #   Keycloak, XXL-Job, PowerJob, Sentinel Dashboard
 #
 # Usage: ./docker_compose_deploy.sh [command] [options]
@@ -52,8 +52,10 @@ declare -A COMPONENTS=(
     ["opensearch"]="opensearchproject/opensearch:2.19.6"
     ["skywalking"]="apache/skywalking-oap-server:10.4.0"
     ["prometheus"]="prom/prometheus:v3.13.1"
+    ["alertmanager"]="prom/alertmanager:v0.29.0"
     ["grafana"]="grafana/grafana-oss:12.4.7"
     ["loki"]="grafana/loki:3.7.2"
+    ["promtail"]="grafana/promtail:3.7.2"
     ["logstash"]="docker.elastic.co/logstash/logstash:8.19.19"
     ["kibana"]="docker.elastic.co/kibana/kibana:8.19.16"
     ["keycloak"]="quay.io/keycloak/keycloak:26.6.2"
@@ -83,8 +85,10 @@ declare -A DESCRIPTIONS=(
     ["opensearch"]="OpenSearch 2.19 - Search & analytics (fork of ES)"
     ["skywalking"]="SkyWalking 10.4 - APM & service mesh observability"
     ["prometheus"]="Prometheus 3.13 - Monitoring & alerting"
+    ["alertmanager"]="Alertmanager 0.29 - Alert routing & notification hub"
     ["grafana"]="Grafana 12.4 - Visualization & dashboards"
     ["loki"]="Loki 3.7 - Log aggregation system"
+    ["promtail"]="Promtail 3.7 - Log collection agent for Loki"
     ["logstash"]="Logstash 8.19 - Log processing pipeline"
     ["kibana"]="Kibana 8.19 - Elasticsearch visualization UI"
     ["keycloak"]="Keycloak 26.6 - Identity & access management"
@@ -114,8 +118,10 @@ declare -A CATEGORIES=(
     ["zookeeper"]="Coordination"
     ["skywalking"]="Monitoring"
     ["prometheus"]="Monitoring"
+    ["alertmanager"]="Monitoring"
     ["grafana"]="Monitoring"
     ["loki"]="Monitoring"
+    ["promtail"]="Logging"
     ["logstash"]="Logging"
     ["kibana"]="Logging"
     ["keycloak"]="Security"
@@ -145,8 +151,10 @@ declare -A PORTS=(
     ["opensearch"]="9200:9200 9600:9600"
     ["skywalking"]="11800:11800 12800:12800"
     ["prometheus"]="9090:9090"
+    ["alertmanager"]="9093:9093"
     ["grafana"]="3000:3000"
     ["loki"]="3100:3100"
+    ["promtail"]="9080:9080"
     ["logstash"]="5044:5044 9600:9600"
     ["kibana"]="5601:5601"
     ["keycloak"]="8080:8080"
@@ -198,8 +206,10 @@ declare -A SERVICE_PREFIXES=(
     ["opensearch"]="opensearch"
     ["skywalking"]="skywalking"
     ["prometheus"]="prometheus"
+    ["alertmanager"]="alertmanager"
     ["grafana"]="grafana"
     ["loki"]="loki"
+    ["promtail"]="promtail"
     ["keycloak"]="keycloak"
     ["xxljob"]="xxl-job"
     ["powerjob"]="powerjob"
@@ -1657,6 +1667,27 @@ gen_prometheus() {
 EOF
 }
 
+gen_alertmanager() {
+    cat << 'EOF'
+
+  alertmanager:
+    image: prom/alertmanager:v0.29.0
+    container_name: alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.enable-lifecycle'
+    volumes:
+      - alertmanager-data:/alertmanager
+      - alertmanager-conf:/etc/alertmanager
+    networks:
+      - docker-stack-net
+EOF
+}
+
 gen_grafana() {
     cat << 'EOF'
 
@@ -1689,6 +1720,28 @@ gen_loki() {
     command: -config.file=/etc/loki/local-config.yaml
     volumes:
       - loki-data:/loki
+    networks:
+      - docker-stack-net
+EOF
+}
+
+gen_promtail() {
+    cat << 'EOF'
+
+  promtail:
+    image: grafana/promtail:3.7.2
+    container_name: promtail
+    restart: unless-stopped
+    ports:
+      - "9080:9080"
+    # 读取容器日志需要挂载 docker.sock 与容器日志目录；
+    # 如遇 permission denied，可在本服务下增加 user: "0"
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - promtail-conf:/etc/promtail
+      - promtail-data:/promtail
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
     networks:
       - docker-stack-net
 EOF
@@ -1864,6 +1917,19 @@ add_volume() {
     else
         VOLUME_NAMES="$1"
     fi
+}
+
+# Write a default config file; existing files are never overwritten.
+# Usage: write_default_config <path> << 'EOF' ... EOF
+write_default_config() {
+    local file="$1"
+    mkdir -p "$(dirname "$file")"
+    if [ -f "$file" ]; then
+        info "Config already exists, keeping it: $file"
+        return 0
+    fi
+    cat > "$file"
+    ok "Default config generated: $file"
 }
 
 # ==============================================================================
@@ -2081,9 +2147,81 @@ EOF
                 gen_skywalking >> "$COMPOSE_FILE"
                 ;;
             prometheus)
+                write_default_config "${DATA_DIR}/prometheus-conf/prometheus.yml" << 'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+rule_files:
+  # - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']
+
+  - job_name: 'promtail'
+    static_configs:
+      - targets: ['promtail:9080']
+EOF
                 gen_prometheus >> "$COMPOSE_FILE"
                 add_volume "prometheus-data"
                 add_volume "prometheus-conf"
+                ;;
+            alertmanager)
+                write_default_config "${DATA_DIR}/alertmanager-conf/alertmanager.yml" << 'EOF'
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'default'
+  routes:
+    - matchers:
+        - severity = "critical"
+      receiver: 'default'
+
+receivers:
+  - name: 'default'
+    # 按需配置通知渠道，例如：
+    # webhook_configs:
+    #   - url: http://your-webhook-url
+    #     send_resolved: true
+    # email_configs:
+    #   - to: ops@example.com
+    #     from: alertmanager@example.com
+    #     smarthost: smtp.example.com:587
+    #     auth_username: alertmanager@example.com
+    #     auth_password: your-password
+    #     send_resolved: true
+
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ['alertname', 'instance']
+EOF
+                gen_alertmanager >> "$COMPOSE_FILE"
+                add_volume "alertmanager-data"
+                add_volume "alertmanager-conf"
                 ;;
             grafana)
                 gen_grafana >> "$COMPOSE_FILE"
@@ -2092,6 +2230,39 @@ EOF
             loki)
                 gen_loki >> "$COMPOSE_FILE"
                 add_volume "loki-data"
+                ;;
+            promtail)
+                write_default_config "${DATA_DIR}/promtail-conf/config.yml" << 'EOF'
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /promtail/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 10s
+        filters:
+          - name: status
+            values: [running]
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: 'stream'
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'compose_service'
+EOF
+                gen_promtail >> "$COMPOSE_FILE"
+                add_volume "promtail-conf"
+                add_volume "promtail-data"
                 ;;
             keycloak)
                 gen_keycloak >> "$COMPOSE_FILE"
@@ -2120,6 +2291,14 @@ EOF
                 ;;
         esac
     done
+
+    # Dependency hints (these components are useless on their own)
+    if [[ " $selected " == *" promtail "* ]] && [[ " $selected " != *" loki "* ]]; then
+        warn "promtail selected without loki: logs have nowhere to go (client points to http://loki:3100)"
+    fi
+    if [[ " $selected " == *" alertmanager "* ]] && [[ " $selected " != *" prometheus "* ]]; then
+        warn "alertmanager selected without prometheus: no alerts will be sent to it"
+    fi
 
     # Add network
     echo "" >> "$COMPOSE_FILE"
@@ -2199,6 +2378,7 @@ cmd_deploy() {
         echo " 19. loki           20. logstash      21. kibana"
         echo " 22. keycloak       23. xxljob        24. powerjob"
         echo " 25. sentinel       26. rustfs        27. pgvector"
+        echo " 28. alertmanager   29. promtail"
         echo ""
         echo "Presets:"
         echo "  a. dev-minimal    (redis, mysql, minio)"
@@ -2209,6 +2389,7 @@ cmd_deploy() {
         echo "  f. all-mq         (rabbitmq, kafka, rocketmq, zookeeper, pulsar)"
         echo "  g. storage        (minio, rustfs)"
         echo "  h. cluster-mq     (kafka:cluster, rabbitmq:cluster, rocketmq:cluster)"
+        echo "  i. monitoring-full(prometheus, alertmanager, grafana, loki, promtail)"
         echo ""
         read -p "Enter component names or preset (comma-separated): " components
 
@@ -2221,6 +2402,7 @@ cmd_deploy() {
             f) components="rabbitmq,kafka,rocketmq,zookeeper,pulsar" ;;
             g) components="minio,rustfs" ;;
             h) components="kafka:cluster,rabbitmq:cluster,rocketmq:cluster" ;;
+            i) components="prometheus,alertmanager,grafana,loki,promtail" ;;
         esac
     fi
 
@@ -2511,9 +2693,11 @@ Presets (use in deploy prompt):
   dev-minimal       redis, mysql, minio
   dev-full          redis, mysql, postgresql, mongodb, minio, nacos, rabbitmq, kafka, zookeeper
   monitoring        prometheus, grafana, loki
+  monitoring-full   prometheus, alertmanager, grafana, loki, promtail
   elk               elasticsearch, kibana, logstash
   all-databases     redis, mysql, postgresql, mongodb
   all-mq            rabbitmq, kafka, rocketmq, zookeeper, pulsar
+  storage           minio, rustfs
   cluster-mq        kafka:cluster, rabbitmq:cluster, rocketmq:cluster
 
 Examples:
@@ -2523,6 +2707,7 @@ Examples:
   $0 deploy kafka:cluster                    # KRaft mode, no ZooKeeper needed
   $0 deploy nacos:cluster,minio:distributed
   $0 deploy postgresql:ha,opensearch:cluster,keycloak:cluster
+  $0 deploy prometheus,alertmanager,grafana,loki,promtail   # metrics + alerting + logs
   $0 deploy              # Interactive mode
   $0 up
   $0 stop redis                      # stop only redis (all its nodes in cluster mode)

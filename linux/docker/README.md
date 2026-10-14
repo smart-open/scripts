@@ -7,7 +7,7 @@
 | 脚本 | 功能 | 使用场景 |
 |------|------|---------|
 | **docker_install.sh** | 自动安装最新版 Docker Engine + Compose | 新服务器初始化 |
-| **docker_compose_deploy.sh** | 一键部署 26+ 基础设施组件 | 开发/测试环境搭建 |
+| **docker_compose_deploy.sh** | 一键部署 28+ 基础设施组件 | 开发/测试环境搭建 |
 | **docker_cleaner.sh** | Docker 资源清理工具 | 定期维护 |
 
 ## 快速开始
@@ -50,6 +50,9 @@ docker compose version
 # PostgreSQL 主从 + OpenSearch 集群 + Keycloak 集群
 ./docker_compose_deploy.sh deploy postgresql:ha,opensearch:cluster,keycloak:cluster
 
+# 监控 + 告警 + 日志全栈
+./docker_compose_deploy.sh deploy prometheus,alertmanager,grafana,loki,promtail
+
 # 启动/停止/状态
 ./docker_compose_deploy.sh up
 ./docker_compose_deploy.sh down
@@ -69,18 +72,19 @@ docker compose version
 ./docker_cleaner.sh -s
 ```
 
-## 支持的组件 (26个)
+## 支持的组件 (28个)
 
 | 类别 | 组件 | 版本 |
 |------|------|------|
 | 数据库 | Redis, MySQL, PostgreSQL, MongoDB | 8.0, 8.4 LTS, 17, 8.0 |
+| 向量库 | pgvector | 0.8 (PG 17) |
 | 搜索 | Elasticsearch, OpenSearch | 8.19, 2.19 |
 | 存储 | MinIO, RustFS | RELEASE.2025-10-15, 1.0.0-alpha.69 |
 | 消息队列 | RabbitMQ, Kafka, RocketMQ, Pulsar | 4.3, 8.3 (KRaft), 5.5, 4.2 |
 | 协调 | ZooKeeper | 3.9 |
 | 网关 | OpenResty, Kong | 1.27, 3.9 |
-| 监控 | Prometheus, Grafana, Loki, SkyWalking | 3.13, 12.4, 3.7, 10.4 |
-| 日志 | Logstash, Kibana | 8.19 |
+| 监控 | Prometheus, Alertmanager, Grafana, Loki, SkyWalking | 3.13, 0.29, 12.4, 3.7, 10.4 |
+| 日志 | Logstash, Kibana, Promtail | 8.19, 3.7 |
 | 安全 | Keycloak, Sentinel | 26.6, 1.8 |
 | 调度 | XXL-Job, PowerJob | 3.4, 5.1 |
 | 注册中心 | Nacos | 3.2 |
@@ -117,7 +121,23 @@ docker compose version
 | all-mq | rabbitmq, kafka, rocketmq, zookeeper, pulsar |
 | storage | minio, rustfs |
 | cluster-mq | kafka:cluster, rabbitmq:cluster, rocketmq:cluster |
+| monitoring-full | prometheus, alertmanager, grafana, loki, promtail |
 
 ## 数据目录
 
 所有数据卷统一挂载到 `~/docker-stack/data/` 目录下。
+
+需要在宿主机编辑的配置文件（首次部署自动生成默认内容，已存在则不会覆盖）：
+
+| 组件 | 配置文件 |
+|------|---------|
+| Prometheus | `~/docker-stack/data/prometheus-conf/prometheus.yml` |
+| Alertmanager | `~/docker-stack/data/alertmanager-conf/alertmanager.yml` |
+| Promtail | `~/docker-stack/data/promtail-conf/config.yml` |
+
+生效方式：
+```bash
+curl -X POST http://localhost:9090/-/reload   # Prometheus 热加载
+curl -X POST http://localhost:9093/-/reload   # Alertmanager 热加载
+./docker_compose_deploy.sh restart promtail   # Promtail 需重启
+```

@@ -1,6 +1,6 @@
 # Docker 基础设施部署操作手册
 
-> 本手册详细介绍如何从零开始在 CentOS/Ubuntu 上安装 Docker，并使用 docker_compose_deploy.sh 一键部署 26+ 基础设施组件。
+> 本手册详细介绍如何从零开始在 CentOS/Ubuntu 上安装 Docker，并使用 docker_compose_deploy.sh 一键部署 28+ 基础设施组件。
 
 ---
 
@@ -181,6 +181,7 @@ rustfs           Storage             RustFS - High-performance distributed objec
 | f | all-mq | rabbitmq, kafka, rocketmq, zookeeper, pulsar | 全部消息队列 |
 | g | storage | minio, rustfs | 对象存储 |
 | h | cluster-mq | kafka:cluster, rabbitmq:cluster, rocketmq:cluster | 消息队列集群 |
+| i | monitoring-full | prometheus, alertmanager, grafana, loki, promtail | 监控+告警+日志全栈 |
 
 **方式二：指定组件部署**
 
@@ -291,8 +292,10 @@ rustfs           Storage             RustFS - High-performance distributed objec
 | OpenSearch | 9201/9600 | http://IP:9201 | admin | admin |
 | SkyWalking | 11800/12800 | http://IP:12800 | - | - |
 | Prometheus | 9090 | http://IP:9090 | - | - |
+| Alertmanager | 9093 | http://IP:9093 | - | - |
 | Grafana | 3000 | http://IP:3000 | admin | admin |
 | Loki | 3100 | - | - | - |
+| Promtail | 9080 | - | - | - |
 | Logstash | 5044/9600 | - | - | - |
 | Keycloak | 8080 | http://IP:8080 | admin | Keycloak123! |
 | XXL-Job | 8089 | http://IP:8089/xxl-job-admin | admin | 123456 |
@@ -404,16 +407,29 @@ curl -u elastic:Elastic123! http://localhost:9200/_cat/indices?v
 # 访问 http://IP:5601
 ```
 
-### 4.8 监控栈 (Prometheus + Grafana + Loki)
+### 4.8 监控栈 (Prometheus + Alertmanager + Grafana + Loki + Promtail)
 
 ```bash
 # Prometheus
 # 访问 http://IP:9090
+# 默认配置已写入 ~/docker-stack/data/prometheus-conf/prometheus.yml
+# 其中 alerting 已指向 alertmanager:9093
+
+# Alertmanager
+# 访问 http://IP:9093
+# 通知渠道配置: ~/docker-stack/data/alertmanager-conf/alertmanager.yml
+# 改完后热加载: curl -X POST http://localhost:9093/-/reload
+
+# Promtail
+# 自动采集本机所有运行中容器的日志并推送到 Loki
+# 采集配置: ~/docker-stack/data/promtail-conf/config.yml (clients -> http://loki:3100)
+# 改完后重启: ./docker_compose_deploy.sh restart promtail
 
 # Grafana
 # 访问 http://IP:3000 (admin/admin)
 # 添加数据源: Prometheus (http://prometheus:9090)
 # 添加数据源: Loki (http://loki:3100)
+# 查看日志: Explore -> Loki -> {container="xxx"} 或 {compose_service="redis"}
 ```
 
 ---
