@@ -1,11 +1,16 @@
 #!/bin/bash
 # Docker Cleaner Script - Cleanup containers, images, volumes, networks
 # Author: System Admin
-# Usage: ./docker_cleaner.sh [-a all] [-i images] [-v volumes] [-o orphan]
+# Usage: ./docker_cleaner.sh [-a all] [-i images] [-v volumes] [-o networks] [-c containers] [-n unused_images] [-b build_cache] [-d dry_run] [-s status]
 
 VERSION="1.0"
 LOG_FILE="/var/log/docker_cleaner.log"
 DRY_RUN=false
+
+# 非 root 时 /var/log 通常不可写，降级避免日志函数自身报错
+if ! touch "$LOG_FILE" 2>/dev/null; then
+    LOG_FILE="/dev/null"
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -129,26 +134,31 @@ clean_dangling_volumes() {
 
 clean_unused_networks() {
     log "Cleaning unused networks..."
-    local networks=$(docker network ls -q 2>/dev/null | wc -l)
     local used=0
-    
-    for net in $(docker network ls -q); do
-        if [ -n "$(docker network inspect -f '{{.Containers}}' "$net" | grep -v "{}")" ]; then
-            ((used++))
+    local unused_list=()
+
+    for net in $(docker network ls -q 2>/dev/null); do
+        # 跳过系统内置网络
+        case "$net" in bridge|host|none) continue ;; esac
+        # 直接取容器数量：{{.Containers}} 为空 map 时输出 map[]，grep -v "{}" 判断会全部误判为"在用"
+        local cnt
+        cnt=$(docker network inspect -f '{{len .Containers}}' "$net" 2>/dev/null)
+        if [ "${cnt:-0}" -gt 0 ]; then
+            used=$((used + 1))
+        else
+            unused_list+=("$net")
         fi
     done
-    
-    local unused=$((networks - used))
+
+    local unused=${#unused_list[@]}
     if [ "$unused" -gt 0 ]; then
         log "Found $unused unused networks"
         if [ "$DRY_RUN" = false ]; then
-            for net in $(docker network ls -q); do
-                if [ -z "$(docker network inspect -f '{{.Containers}}' "$net" | grep -v "{}")" ]; then
-                    docker network rm "$net" 2>/dev/null
-                fi
+            for net in "${unused_list[@]}"; do
+                docker network rm "$net" 2>/dev/null
             done
             log "Removed $unused unused networks"
-            ((TOTAL_CLEANED += unused))
+            TOTAL_CLEANED=$((TOTAL_CLEANED + unused))
         else
             log "[DRY RUN] Would remove $unused networks"
         fi
@@ -171,13 +181,14 @@ clean_all() {
     log "=========================================="
     log "Running FULL Docker cleanup"
     log "=========================================="
-    
+
     clean_stopped_containers
     clean_dangling_images
+    clean_unused_images
     clean_dangling_volumes
     clean_unused_networks
     clean_build_cache
-    
+
     log "=========================================="
     log "Full cleanup completed. Total items cleaned: $TOTAL_CLEANED"
     log "=========================================="
@@ -215,25 +226,76 @@ show_summary() {
     echo "=========================================="
 }
 
-while getopts "aicvonbdsh" opt; do
+usage() {
+    echo "Usage: $0 [-a all] [-i images] [-v volumes] [-o networks] [-c containers]"
+    echo "                [-n unused_images] [-b build_cache] [-d dry_run] [-s status]"
+    echo ""
+    echo "  -a  full cleanup (containers + images + volumes + networks + build cache)"
+    echo "  -d  dry run: only show what would be cleaned, remove nothing"
+    echo "  -s  show docker disk usage"
+    echo "  -h  show this help"
+}
+
+# 动作标记统一先收集再执行：保证 -d dry-run 不受选项顺序影响，
+# 且带任何动作选项时都能先通过 Docker 环境检查（原实现动作在检查前直接执行并退出）
+DO_ALL=false; DO_IMAGES=false; DO_VOLUMES=false; DO_NETWORKS=false
+DO_CONTAINERS=false; DO_UNUSED_IMAGES=false; DO_BUILD_CACHE=false
+SHOW_STATUS=false
+
+while getopts ":aicvonbdsh" opt; do
     case $opt in
-        a) clean_all; show_summary; exit 0 ;;
-        i) clean_dangling_images; show_summary; exit 0 ;;
-        v) clean_dangling_volumes; show_summary; exit 0 ;;
-        o) clean_unused_networks; show_summary; exit 0 ;;
-        n) clean_unused_images; show_summary; exit 0 ;;
-        b) clean_build_cache; show_summary; exit 0 ;;
-        c) clean_stopped_containers; show_summary; exit 0 ;;
+        a) DO_ALL=true ;;
+        i) DO_IMAGES=true ;;
+        v) DO_VOLUMES=true ;;
+        o) DO_NETWORKS=true ;;
+        c) DO_CONTAINERS=true ;;
+        n) DO_UNUSED_IMAGES=true ;;
+        b) DO_BUILD_CACHE=true ;;
         d) DRY_RUN=true ;;
-        s) show_disk_usage; exit 0 ;;
-        h) echo "Usage: $0 [-a all] [-i images] [-v volumes] [-o networks] [-c containers] [-n unused_images] [-b build_cache] [-d dry_run] [-s status]"; exit 0 ;;
+        s) SHOW_STATUS=true ;;
+        h) usage; exit 0 ;;
+        \?) echo "Unknown option: -$OPTARG"; usage; exit 2 ;;
     esac
 done
+
+# 状态查看仅需要 Docker 连接
+if [ "$SHOW_STATUS" = true ]; then
+    check_docker_running || exit 1
+    show_disk_usage
+    exit 0
+fi
+
+if ! $DO_ALL && ! $DO_IMAGES && ! $DO_VOLUMES && ! $DO_NETWORKS \
+   && ! $DO_CONTAINERS && ! $DO_UNUSED_IMAGES && ! $DO_BUILD_CACHE; then
+    echo "Docker Cleaner Script v$VERSION"
+    usage
+    echo ""
+    echo "[提示] 未指定清理动作，未执行任何操作"
+    exit 1
+fi
 
 if ! check_docker_running; then
     exit 1
 fi
 
-echo "Docker Cleaner Script v$VERSION"
-echo "Use -h for help"
-echo "Use -a for full cleanup"
+# 全量清理属危险操作，dry-run 之外需二次确认
+if [ "$DO_ALL" = true ] && [ "$DRY_RUN" = false ]; then
+    read -r -p "[确认] 即将对本机 Docker 执行全量清理，是否继续? [y/N]: " answer
+    case "$answer" in
+        y|Y|yes|YES) log "Full cleanup confirmed by user" ;;
+        *) echo "已取消"; exit 0 ;;
+    esac
+fi
+
+if [ "$DO_ALL" = true ]; then
+    clean_all
+else
+    $DO_CONTAINERS && clean_stopped_containers
+    $DO_IMAGES && clean_dangling_images
+    $DO_UNUSED_IMAGES && clean_unused_images
+    $DO_VOLUMES && clean_dangling_volumes
+    $DO_NETWORKS && clean_unused_networks
+    $DO_BUILD_CACHE && clean_build_cache
+fi
+
+show_summary

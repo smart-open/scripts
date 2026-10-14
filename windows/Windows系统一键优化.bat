@@ -1,4 +1,6 @@
 @echo off
+chcp 65001 >nul
+setlocal
 title Windows系统一键优化工具 v2.0
 mode con cols=90 lines=40
 color 0A
@@ -10,7 +12,7 @@ fltmc >nul 2>&1 || (
     echo.
     echo [X] 请以管理员身份运行此脚本!
     echo.
-    echo 右键点击脚本 -^以管理员身份运行
+    echo 右键点击脚本 -^> 以管理员身份运行
     echo.
     pause
     exit /b 1

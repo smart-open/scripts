@@ -42,15 +42,24 @@ check_open_ports() {
     echo "--- Checking Open Ports ---" | tee -a "$REPORT_FILE"
     
     local dangerous_ports="21 23 111 2049"
-    local listening=$(netstat -tuln 2>/dev/null | grep LISTEN | awk '{print $4}' | grep -E ':([0-9]+)$' | sed 's/.*://' | sort -n | uniq)
-    
+    local listening=""
+    if command -v ss >/dev/null 2>&1; then
+        listening=$(ss -tuln 2>/dev/null | awk '$1=="LISTEN" {print $5}' | sed 's/.*://' | sort -n | uniq)
+    elif command -v netstat >/dev/null 2>&1; then
+        listening=$(netstat -tuln 2>/dev/null | grep LISTEN | awk '{print $4}' | grep -E ':([0-9]+)$' | sed 's/.*://' | sort -n | uniq)
+    else
+        echo -e "${YELLOW}[SKIP]${NC} Neither ss nor netstat available" | tee -a "$REPORT_FILE"
+        return
+    fi
+
     for port in $dangerous_ports; do
         if echo "$listening" | grep -q "^$port$"; then
             add_finding HIGH "Ports" "Dangerous port $port is open"
         fi
     done
-    
-    local open_count=$(echo "$listening" | wc -l)
+
+    local open_count=0
+    [ -n "$listening" ] && open_count=$(echo "$listening" | wc -l)
     add_finding LOW "Ports" "$open_count ports are listening"
     
     echo -e "${GREEN}[OK]${NC} Port check completed" | tee -a "$REPORT_FILE"
@@ -59,16 +68,18 @@ check_open_ports() {
 check_suid_files() {
     echo "--- Checking SUID Files ---" | tee -a "$REPORT_FILE"
     
-    local suspicious_suid="/bin/ping /usr/bin/passwd /usr/bin/sudo"
+    local allowed_suid="/bin/ping /usr/bin/passwd /usr/bin/sudo"
     local suid_files=$(find / -type f -perm -4000 2>/dev/null | head -50)
-    
+
     for file in $suid_files; do
-        if ! echo "$suspicious_suid" | grep -q "$file"; then
+        # -F 整词精确匹配，避免路径子串误放行
+        if ! echo "$allowed_suid" | grep -qF "$file"; then
             add_finding MEDIUM "SUID" "SUID file found: $file"
         fi
     done
-    
-    local count=$(echo "$suid_files" | wc -l)
+
+    local count=0
+    [ -n "$suid_files" ] && count=$(echo "$suid_files" | wc -l)
     add_finding LOW "SUID" "Total SUID files: $count"
     
     echo -e "${GREEN}[OK]${NC} SUID file check completed" | tee -a "$REPORT_FILE"
@@ -148,7 +159,8 @@ check_ssh_config() {
 check_cron_jobs() {
     echo "--- Checking Cron Jobs ---" | tee -a "$REPORT_FILE"
     
-    local world_writable=$(find /etc/cron* -type f -writable 2>/dev/null | wc -l)
+    # -perm -0002 检查 other 可写（root 下 -writable 恒真会全部误报）
+    local world_writable=$(find /etc/cron* -type f -perm -0002 2>/dev/null | wc -l)
     if [ "$world_writable" -gt 0 ]; then
         add_finding MEDIUM "Cron" "$world_writable world-writable cron files found"
     fi

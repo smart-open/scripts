@@ -41,6 +41,18 @@ for %%d in (%drives%) do (
     )
 )
 
+::: 搜索经典版微信（WeChat）
+for %%d in (%drives%) do (
+    for %%a in (%archs%) do (
+        if not defined wechat_path (
+            if exist "%%d:\%%a\Tencent\WeChat\WeChat.exe" (
+                set "wechat_path=%%d:\%%a\Tencent\WeChat\WeChat.exe"
+                echo 找到经典版微信安装路径
+            )
+        )
+    )
+)
+
 :: 搜索根目录安装
 for %%d in (%drives%) do (
     if not defined wechat_path (
@@ -53,7 +65,7 @@ for %%d in (%drives%) do (
 
 :: 从桌面快捷方式搜索
 if not defined wechat_path (
-    for %%d in ("%USERPROFILE%\Desktop" "C:\Users\Public\Desktop") do (
+    for %%d in ("%USERPROFILE%\Desktop" "%USERPROFILE%\OneDrive\Desktop" "C:\Users\Public\Desktop") do (
         if not defined wechat_path (
             for %%f in ("%%~d\微信*.lnk" "%%~d\WeChat*.lnk") do (
                 for /f "usebackq delims=" %%p in (`powershell -Command "(New-Object -ComObject WScript.Shell).CreateShortcut('%%~ff').TargetPath" 2^>nul`) do (

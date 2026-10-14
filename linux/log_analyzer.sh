@@ -22,6 +22,13 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+# grep -c 无匹配时输出 "0" 且退出码为 1，不能写 "|| echo 0"（会输出两行 0）
+count_matches() {
+    local count
+    count=$(grep -c "$@" 2>/dev/null) || true
+    echo "${count:-0}"
+}
+
 analyze_auth_log() {
     local log_file="$1"
     [ -z "$log_file" ] && log_file="/var/log/auth.log"
@@ -50,7 +57,7 @@ analyze_auth_log() {
     
     echo ""
     echo "Recent failed login attempts:"
-    grep "Failed password" "$log_file" | tail -10 | awk '{print $1, $2, $3, $11}'
+    grep "Failed password" "$log_file" | tail -n "$NUM_LINES" | awk '{print $1, $2, $3, $11}'
     
     ((TOTAL_ERRORS += failed_logins + invalid_users))
     ((TOTAL_WARNINGS += root_logins))
@@ -109,10 +116,10 @@ analyze_system_log() {
         return 1
     fi
     
-    local total_errors=$(grep -ci "error" "$log_file" 2>/dev/null || echo "0")
-    local total_warnings=$(grep -ci "warn" "$log_file" 2>/dev/null || echo "0")
-    local total_critical=$(grep -ci "critical\|fatal\|panic" "$log_file" 2>/dev/null || echo "0")
-    local oom_kills=$(grep -c "oom-killer" "$log_file" 2>/dev/null || echo "0")
+    local total_errors=$(count_matches -i "error" "$log_file")
+    local total_warnings=$(count_matches -i "warn" "$log_file")
+    local total_critical=$(count_matches -i "critical\|fatal\|panic" "$log_file")
+    local oom_kills=$(count_matches "oom-killer" "$log_file")
     
     echo -e "${RED}Critical errors:${NC} $total_critical"
     echo -e "${RED}Total errors:${NC} $total_errors"
@@ -121,7 +128,7 @@ analyze_system_log() {
     
     echo ""
     echo "Recent critical errors:"
-    grep -i "critical\|fatal\|panic" "$log_file" | tail -10
+    grep -i "critical\|fatal\|panic" "$log_file" | tail -n "$NUM_LINES"
     
     ((TOTAL_ERRORS += total_errors + total_critical + oom_kills))
     ((TOTAL_WARNINGS += total_warnings))
@@ -141,10 +148,10 @@ analyze_kernel_log() {
         return 1
     fi
     
-    local oom=$(grep -c "Out of memory" "$log_file" 2>/dev/null || echo "0")
-    local segfaults=$(grep -c "segfault" "$log_file" 2>/dev/null || echo "0")
-    local i_errors=$(grep -ci "I/O error\|disk error" "$log_file" 2>/dev/null || echo "0")
-    local hw_errors=$(grep -ci "hardware error\|machine check" "$log_file" 2>/dev/null || echo "0")
+    local oom=$(count_matches "Out of memory" "$log_file")
+    local segfaults=$(count_matches "segfault" "$log_file")
+    local i_errors=$(count_matches -i "I/O error\|disk error" "$log_file")
+    local hw_errors=$(count_matches -i "hardware error\|machine check" "$log_file")
     
     echo -e "${RED}OOM events:${NC} $oom"
     echo -e "${RED}Segfaults:${NC} $segfaults"
@@ -153,7 +160,7 @@ analyze_kernel_log() {
     
     echo ""
     echo "Recent kernel errors:"
-    grep -i "error\|segfault\|oom" "$log_file" | tail -10
+    grep -i "error\|segfault\|oom" "$log_file" | tail -n "$NUM_LINES"
     
     ((TOTAL_ERRORS += oom + segfaults + i_errors + hw_errors))
 }
@@ -163,15 +170,15 @@ analyze_dmesg() {
     echo "dmesg Analysis"
     echo "=========================================="
     
-    local errors=$(dmesg 2>/dev/null | grep -ci "error\|fail\|warn" || echo "0")
-    local hw_err=$(dmesg 2>/dev/null | grep -ci "hardware\|thermal\|cpu" || echo "0")
+    local errors=$(dmesg 2>/dev/null | count_matches -i "error\|fail\|warn")
+    local hw_err=$(dmesg 2>/dev/null | count_matches -i "hardware\|thermal\|machine check")
     
     echo -e "${YELLOW}Errors/Warnings:${NC} $errors"
     echo -e "${YELLOW}Hardware-related messages:${NC} $hw_err"
     
     echo ""
     echo "Recent error messages:"
-    dmesg 2>/dev/null | grep -i "error\|warn\|fail" | tail -10 | sed 's/\[[^]]*\] //'
+    dmesg 2>/dev/null | grep -i "error\|warn\|fail" | tail -n "$NUM_LINES" | sed 's/\[[^]]*\] //'
     
     ((TOTAL_ERRORS += errors + hw_err))
 }
@@ -190,7 +197,7 @@ analyze_custom_log() {
     fi
     
     local total_lines=$(wc -l < "$log_file")
-    local total_errors=$(grep -ci "error" "$log_file" 2>/dev/null || echo "0")
+    local total_errors=$(count_matches -i "error" "$log_file")
     
     echo "Total lines: $total_lines"
     echo "Total errors (case-insensitive): $total_errors"
@@ -280,6 +287,8 @@ case "$LOG_TYPE" in
         analyze_kernel_log
         echo ""
         analyze_dmesg
+        echo ""
+        analyze_nginx_log "$LOG_FILE"
         ;;
     *)
         if [ -n "$LOG_FILE" ]; then

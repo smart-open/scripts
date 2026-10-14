@@ -51,9 +51,10 @@ check_sudoers_permissions() {
     fi
     
     if [ -d /etc/sudoers.d ]; then
-        find /etc/sudoers.d -type f ! -perm 440 2>/dev/null | while read file; do
+        # 进程替换避免 while read 子 shell 丢变量
+        while read -r file; do
             add_finding MEDIUM "Insecure sudoers.d file permissions: $file"
-        done
+        done < <(find /etc/sudoers.d -type f ! -perm 440 2>/dev/null)
     fi
 }
 
@@ -65,20 +66,20 @@ list_sudo_users() {
     echo "Users with Sudo Privileges" | tee -a "$REPORT_FILE"
     echo "==========================================" | tee -a "$REPORT_FILE"
     
-    grep -v "^#" /etc/sudoers 2>/dev/null | grep -v "^$" | grep -E "^[a-z]" | while read line; do
+    while read -r line; do
         if echo "$line" | grep -q "ALL=(ALL)"; then
             add_finding MEDIUM "User has full sudo access: $line"
         fi
-    done
-    
+    done < <(grep -v "^#" /etc/sudoers 2>/dev/null | grep -v "^$" | grep -E "^[a-zA-Z%]")
+
     if [ -d /etc/sudoers.d ]; then
         for file in /etc/sudoers.d/*; do
             if [ -f "$file" ]; then
-                grep -v "^#" "$file" 2>/dev/null | grep -v "^$" | grep -E "^[a-z]" | while read line; do
+                while read -r line; do
                     if echo "$line" | grep -q "ALL=(ALL)"; then
                         add_finding MEDIUM "User has full sudo access (from $file): $line"
                     fi
-                done
+                done < <(grep -v "^#" "$file" 2>/dev/null | grep -v "^$" | grep -E "^[a-zA-Z%]")
             fi
         done
     fi
@@ -98,18 +99,18 @@ check_passwordless_sudo() {
     log "Checking for passwordless sudo..."
     
     local count=0
-    grep -v "^#" /etc/sudoers 2>/dev/null | grep "NOPASSWD" | while read line; do
+    while read -r line; do
         add_finding HIGH "Passwordless sudo configured: $line"
-        ((count++))
-    done
-    
+        count=$((count + 1))
+    done < <(grep -v "^#" /etc/sudoers 2>/dev/null | grep "NOPASSWD")
+
     if [ -d /etc/sudoers.d ]; then
         for file in /etc/sudoers.d/*; do
             if [ -f "$file" ]; then
-                grep -v "^#" "$file" 2>/dev/null | grep "NOPASSWD" | while read line; do
+                while read -r line; do
                     add_finding HIGH "Passwordless sudo configured in $file: $line"
-                    ((count++))
-                done
+                    count=$((count + 1))
+                done < <(grep -v "^#" "$file" 2>/dev/null | grep "NOPASSWD")
             fi
         done
     fi
@@ -124,14 +125,15 @@ check_command_restrictions() {
     
     local full_access=0
     local restricted=0
-    
-    grep -v "^#" /etc/sudoers 2>/dev/null | grep -v "^$" | grep -E "^[a-z]" | while read line; do
-        if echo "$line" | grep -q "ALL=(ALL) ALL"; then
-            ((full_access++))
+
+    while read -r line; do
+        # 覆盖 ALL=(ALL) ALL 与 ALL=(ALL:ALL) ALL 两种常见写法
+        if echo "$line" | grep -qE "ALL=\(ALL(:ALL)?\) ALL"; then
+            full_access=$((full_access + 1))
         elif echo "$line" | grep -q "ALL=(ALL)"; then
-            ((restricted++))
+            restricted=$((restricted + 1))
         fi
-    done
+    done < <(grep -v "^#" /etc/sudoers 2>/dev/null | grep -v "^$" | grep -E "^[a-zA-Z%]")
     
     echo -e "${GREEN}Full access users:${NC} $full_access" | tee -a "$REPORT_FILE"
     echo -e "${GREEN}Restricted command users:${NC} $restricted" | tee -a "$REPORT_FILE"
@@ -141,8 +143,9 @@ check_sudoers_backup() {
     log "Checking for sudoers backups..."
     
     local backup_files=$(find /etc -maxdepth 2 -name "*sudoers*" 2>/dev/null | grep -v "^/etc/sudoers$" | grep -v "^/etc/sudoers.d")
-    local count=$(echo "$backup_files" | wc -l)
-    
+    local count=0
+    [ -n "$backup_files" ] && count=$(echo "$backup_files" | wc -l)
+
     if [ $count -gt 0 ]; then
         echo -e "${YELLOW}Found sudoers backup files:${NC}" | tee -a "$REPORT_FILE"
         echo "$backup_files" | tee -a "$REPORT_FILE"
@@ -151,15 +154,19 @@ check_sudoers_backup() {
 
 check_env_reset() {
     log "Checking environment reset configuration..."
-    
-    if grep -q "^Defaults.*env_reset" /etc/sudoers 2>/dev/null; then
+
+    # Defaults 可能放在 /etc/sudoers.d/ 下（发行版默认如此），需合并检查
+    local sudoers_all="/etc/sudoers"
+    [ -d /etc/sudoers.d ] && sudoers_all="/etc/sudoers /etc/sudoers.d/*"
+
+    if grep -s -h "^Defaults.*env_reset" $sudoers_all >/dev/null 2>&1; then
         log "[OK] env_reset is configured"
     else
         add_finding MEDIUM "env_reset is NOT configured (security risk)"
     fi
     
-    if grep -q "^Defaults.*env_keep" /etc/sudoers 2>/dev/null; then
-        local kept=$(grep "^Defaults.*env_keep" /etc/sudoers | head -1)
+    if grep -s -h "^Defaults.*env_keep" $sudoers_all >/dev/null 2>&1; then
+        local kept=$(grep -s -h "^Defaults.*env_keep" $sudoers_all | head -1)
         add_finding LOW "Environment variables kept: $kept"
     fi
 }
@@ -167,8 +174,11 @@ check_env_reset() {
 check_secure_path() {
     log "Checking secure_path configuration..."
     
-    if grep -q "^Defaults.*secure_path" /etc/sudoers 2>/dev/null; then
-        local path=$(grep "^Defaults.*secure_path" /etc/sudoers | head -1 | cut -d'"' -f2)
+    local sudoers_all="/etc/sudoers"
+    [ -d /etc/sudoers.d ] && sudoers_all="/etc/sudoers /etc/sudoers.d/*"
+
+    if grep -s -h "^Defaults.*secure_path" $sudoers_all >/dev/null 2>&1; then
+        local path=$(grep -s -h "^Defaults.*secure_path" $sudoers_all | head -1 | cut -d'"' -f2)
         log "[OK] secure_path is configured: $path"
     else
         add_finding MEDIUM "secure_path is NOT configured (security risk)"
@@ -187,7 +197,8 @@ audit_sudo_logs() {
     
     if [ -n "$auth_log" ]; then
         local sudo_commands=$(grep "sudo" "$auth_log" 2>/dev/null | grep "COMMAND=" | tail -20)
-        local count=$(echo "$sudo_commands" | wc -l)
+        local count=0
+        [ -n "$sudo_commands" ] && count=$(echo "$sudo_commands" | wc -l)
         
         echo "" | tee -a "$REPORT_FILE"
         echo "==========================================" | tee -a "$REPORT_FILE"

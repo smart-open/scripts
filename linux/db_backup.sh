@@ -131,25 +131,43 @@ restore_backup() {
         *.bz2) bunzip2 -c "$backup_file" > "$temp_sql" ;;
         *.xz) xz -d -c "$backup_file" > "$temp_sql" ;;
         *.sql) cp "$backup_file" "$temp_sql" ;;
+        *) log "[ERROR] Unsupported backup file format: $backup_file"; rm -f "$temp_sql"; return 1 ;;
     esac
-    
+
+    local rc=1
     if [ "$DB_TYPE" = "mysql" ]; then
+        if [ -z "$DB_NAME" ]; then
+            log "[ERROR] Restore requires database name (-d)"
+            rm -f "$temp_sql"
+            return 1
+        fi
         # 使用MYSQL_PWD环境变量避免命令行密码暴露
         local mysql_opts="-h $DB_HOST -u $DB_USER"
         [ -n "$DB_PORT" ] && mysql_opts="$mysql_opts -P $DB_PORT"
         export MYSQL_PWD="$DB_PASS"
         mysql $mysql_opts "$DB_NAME" < "$temp_sql" 2>> "$LOG_FILE"
+        rc=$?
         unset MYSQL_PWD
     elif [ "$DB_TYPE" = "pgsql" ]; then
+        if [ -z "$DB_NAME" ]; then
+            log "[ERROR] Restore requires database name (-d)"
+            rm -f "$temp_sql"
+            return 1
+        fi
         export PGPASSWORD="$DB_PASS"
         local pg_opts="-h $DB_HOST -U $DB_USER"
         psql $pg_opts "$DB_NAME" < "$temp_sql" 2>> "$LOG_FILE"
+        rc=$?
         unset PGPASSWORD
+    else
+        log "[ERROR] Unsupported database type: $DB_TYPE"
+        rm -f "$temp_sql"
+        return 1
     fi
-    
+
     rm -f "$temp_sql"
-    
-    if [ $? -eq 0 ]; then
+
+    if [ $rc -eq 0 ]; then
         log "Restore completed successfully"
         return 0
     else
@@ -166,6 +184,16 @@ list_backups() {
     echo "=========================================="
 }
 
+usage() {
+    echo "Usage: $0 -t mysql|pgsql [-h host] [-u user] [-p pass] -d db [-r restore_file] [-k days] [-a]"
+    echo "       -a backup all databases (mysql only), -l list backups, -r restore from file"
+}
+
+if [ $# -eq 0 ]; then
+    usage
+    exit 1
+fi
+
 while getopts "t:h:P:u:p:d:c:r:k:lah" opt; do
     case $opt in
         t) DB_TYPE="$OPTARG" ;;
@@ -179,7 +207,7 @@ while getopts "t:h:P:u:p:d:c:r:k:lah" opt; do
         k) KEEP_DAYS="$OPTARG" ;;
         l) list_backups; exit 0 ;;
         a) BACKUP_ALL=true ;;
-        h) echo "Usage: $0 -t mysql|pgsql [-h host] [-u user] [-p pass] -d db [-r restore_file] [-k days] [-a]"; exit 0 ;;
+        \?) echo "Unknown option: -$OPTARG"; usage; exit 2 ;;
     esac
 done
 
@@ -196,6 +224,10 @@ if [ -z "$DB_NAME" ] && [ -z "$BACKUP_ALL" ]; then
 fi
 
 if [ "$BACKUP_ALL" = true ]; then
+    if [ "$DB_TYPE" = "pgsql" ]; then
+        log "[ERROR] -a (all databases) is only supported for mysql"
+        exit 1
+    fi
     backup_all_mysql
 else
     case $DB_TYPE in

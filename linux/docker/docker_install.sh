@@ -11,20 +11,30 @@ AUTO_YES=false
 MIRROR="default"
 LOG_FILE="/var/log/docker_install.log"
 
+# 非 root 时 /var/log 通常不可写，降级避免日志函数自身报错（root 检查在此之前打印）
+if ! touch "$LOG_FILE" 2>/dev/null; then
+    LOG_FILE="/dev/null"
+fi
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+# 写日志统一无色（ANSI 码不进入日志文件），终端输出按 TTY 决定是否带色
+_log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
-info()  { echo -e "${BLUE}[INFO]${NC} $1" | tee -a "$LOG_FILE"; }
-ok()    { echo -e "${GREEN}[OK]${NC} $1" | tee -a "$LOG_FILE"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $1" | tee -a "$LOG_FILE"; }
-error() { echo -e "${RED}[ERROR]${NC} $1" | tee -a "$LOG_FILE"; }
+_term() {
+    if [ -t 1 ]; then echo -e "$1"; else echo -e "$1" | sed 's/\x1b\[[0-9;]*m//g'; fi
+}
+
+info()  { _term "${BLUE}[INFO]${NC} $1"; _log "[INFO] $1"; }
+ok()    { _term "${GREEN}[OK]${NC} $1"; _log "[OK] $1"; }
+warn()  { _term "${YELLOW}[WARN]${NC} $1"; _log "[WARN] $1"; }
+error() { _term "${RED}[ERROR]${NC} $1" >&2; _log "[ERROR] $1"; }
 
 # Check root
 check_root() {
@@ -159,13 +169,19 @@ install_docker_debian() {
     # Add Docker GPG key
     install -m 0755 -d /etc/apt/keyrings
 
+    # 发行版分仓库路径：ubuntu 与 debian 的 apt 源不同，不能硬编码 ubuntu
+    local distro="${OS_ID:-ubuntu}"
+    if [[ "$distro" != "ubuntu" && "$distro" != "debian" ]]; then
+        distro="ubuntu"
+    fi
+
     if [ "$MIRROR" = "china" ]; then
         info "Using China mirror for Docker repository"
-        curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+        curl -fsSL "https://mirrors.aliyun.com/docker-ce/linux/$distro/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/$distro $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
     else
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+        curl -fsSL "https://download.docker.com/linux/$distro/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$distro $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
     fi
 
     chmod a+r /etc/apt/keyrings/docker.gpg
@@ -184,6 +200,13 @@ configure_docker() {
     info "Configuring Docker daemon..."
 
     mkdir -p /etc/docker
+
+    # 已有配置先备份，避免覆盖用户自定义的镜像源/日志配置
+    if [ -f /etc/docker/daemon.json ]; then
+        local backup="/etc/docker/daemon.json.bak.$(date +%Y%m%d%H%M%S)"
+        cp /etc/docker/daemon.json "$backup"
+        warn "Existing daemon.json backed up to: $backup"
+    fi
 
     if [ "$MIRROR" = "china" ]; then
         cat > /etc/docker/daemon.json << 'EOF'
@@ -295,6 +318,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --mirror)
+            if [[ -z "${2:-}" || ! "$2" =~ ^(china|default)$ ]]; then
+                error "--mirror requires a value: china|default"
+                exit 1
+            fi
             MIRROR="$2"
             shift 2
             ;;

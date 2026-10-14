@@ -22,18 +22,35 @@ alert() {
     local msg="$1"
     log "[ALERT] $msg"
     if [ -n "$ALERT_EMAIL" ]; then
-        echo "$msg" | mail -s "System Alert: $msg" "$ALERT_EMAIL"
+        if command -v mail >/dev/null 2>&1; then
+            echo "$msg" | mail -s "System Alert: $msg" "$ALERT_EMAIL"
+        else
+            log "[WARNING] mail command not available, alert not sent: $msg"
+        fi
     fi
 }
 
 get_cpu_usage() {
-    # 使用/proc/stat获取，兼容所有发行版
-    cat /proc/stat | awk '/^cpu / {usage=($2+$4)*100/($2+$4+$5)} END {printf "%d\n", usage}'
+    # /proc/stat 是开机以来的累计值，需两次采样取差值才是"当前使用率"
+    local stat1 stat2
+    stat1=$(awk '/^cpu / {print $2+$3+$4, $2+$4}' /proc/stat)
+    sleep 1
+    stat2=$(awk '/^cpu / {print $2+$3+$4, $2+$4}' /proc/stat)
+    awk -v s1="$stat1" -v s2="$stat2" '{
+        split(s1, a, " "); split(s2, b, " ")
+        d_total = b[1] - a[1]; d_busy = b[2] - a[2]
+        if (d_total <= 0) { print 0 } else { printf "%d", d_busy * 100 / d_total }
+    }'
 }
 
 get_mem_usage() {
-    # 兼容不同free输出格式
-    free | awk '/Mem:/ {print int($3/$2 * 100)}'
+    # 优先使用 MemAvailable（内核3.14+），语义更准确且不受 free 输出格式影响
+    local meminfo="/proc/meminfo"
+    if grep -q "^MemAvailable:" "$meminfo" 2>/dev/null; then
+        awk '/^MemTotal:/ {t=$2} /^MemAvailable:/ {a=$2} END {printf "%d", (t-a)*100/t}' "$meminfo"
+    else
+        free | awk '/Mem:/ {print int($3/$2 * 100)}'
+    fi
 }
 
 get_disk_usage() {

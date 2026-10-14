@@ -61,20 +61,25 @@ download_package() {
     
     log "Downloading package from: $package_url"
     
+    local rc=1
     if command -v wget >/dev/null 2>&1; then
-        wget -q "$package_url" -O "$package_file"
+        wget -q --timeout=60 "$package_url" -O "$package_file"
+        rc=$?
     elif command -v curl >/dev/null 2>&1; then
-        curl -s "$package_url" -o "$package_file"
+        # -f: HTTP 4xx/5xx 时返回非 0，避免把错误页当包保存
+        curl -fsSL --max-time 120 "$package_url" -o "$package_file"
+        rc=$?
     else
         log "[ERROR] Neither wget nor curl available"
         return 1
     fi
-    
-    if [ $? -eq 0 ] && [ -f "$package_file" ]; then
+
+    if [ $rc -eq 0 ] && [ -f "$package_file" ]; then
         log "Download completed: $package_file"
         echo "$package_file"
         return 0
     else
+        rm -f "$package_file"
         log "[ERROR] Download failed"
         return 1
     fi
@@ -181,7 +186,8 @@ health_check() {
     
     for ((i=1; i<=max_retries; i++)); do
         if [ -n "$health_url" ]; then
-            if curl -s -o /dev/null -w "%{http_code}" "$health_url" | grep -q "200"; then
+            # 精确匹配 200，避免 1200/2001/5200 误判为通过
+            if curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$health_url" | grep -q "^200$"; then
                 log "Health check passed (attempt $i/$max_retries)"
                 return 0
             fi
@@ -301,15 +307,17 @@ show_current_version() {
     fi
 }
 
-while getopts "n:v:a:u:r:lh" opt; do
+while getopts "n:v:a:u:H:r:lh" opt; do
     case $opt in
         n) SERVICE_NAME="$OPTARG" ;;
         v) SERVICE_VERSION="$OPTARG" ;;
         a) ACTION="$OPTARG" ;;
         u) PACKAGE_URL="$OPTARG" ;;
+        H) HEALTH_CHECK_URL="$OPTARG" ;;
         r) ROLLBACK_VERSION="$OPTARG" ;;
         l) LIST_BACKUPS=true ;;
-        h) echo "Usage: $0 -n service -v version -a deploy|rollback [-u url] [-r backup_file] [-l]"; exit 0 ;;
+        h) echo "Usage: $0 -n service -v version -a deploy|rollback [-u url] [-H health_url] [-r backup_file] [-l]"; exit 0 ;;
+        \?) echo "Unknown option: -$OPTARG. Use -h for help."; exit 2 ;;
     esac
 done
 
@@ -334,6 +342,10 @@ case "$ACTION" in
             echo "Package URL required. Use -u url"
             exit 1
         fi
+        if [ -z "$SERVICE_VERSION" ]; then
+            echo "Service version required for deploy. Use -v version"
+            exit 1
+        fi
         deploy "$PACKAGE_URL" "$HEALTH_CHECK_URL"
         ;;
     rollback)
@@ -353,6 +365,7 @@ case "$ACTION" in
         echo "  -n name      Service name (required)"
         echo "  -v version   Version being deployed"
         echo "  -u url       Package URL (tar.gz)"
+        echo "  -H url       Health check URL (HTTP 200 required after deploy)"
         echo "  -r file      Rollback from specific backup file"
         echo "  -l           List available backups"
         ;;

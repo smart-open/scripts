@@ -66,15 +66,27 @@ COUNT_FAIL=0
 declare -A ROOT_CAUSES
 MD_SKIP=false
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-PURPLE='\033[0;35m'
-NC='\033[0m' # No Color
+# 颜色定义（stdout 重定向到文件/管道时自动禁用，避免日志出现转义码）
+if [ -t 1 ]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
+    WHITE='\033[1;37m'
+    PURPLE='\033[0;35m'
+    NC='\033[0m' # No Color
+else
+    RED='' GREEN='' YELLOW='' BLUE='' CYAN='' WHITE='' PURPLE='' NC=''
+fi
+
+# 统一计数助手：grep -c 无匹配时输出 "0" 且退出码为 1，
+# 不能写 "$(grep -c ... || echo 0)"（无匹配时会输出两行 "0\n0"）
+count_of() {
+    local count
+    count=$(grep -c "$@" 2>/dev/null) || true
+    echo "${count:-0}"
+}
 
 # ===========================================================================
 # 预警阈值统一定义
@@ -241,6 +253,11 @@ add_root_cause() {
 }
 
 init_report() {
+    # 交互式菜单连续执行多项诊断时重置计数器与根因列表，避免摘要数字累加失真
+    COUNT_WARN=0
+    COUNT_CRIT=0
+    unset ROOT_CAUSES
+    declare -gA ROOT_CAUSES
     mkdir -p "$REPORT_DIR"
     cat > "$REPORT_FILE" <<EOF
 # Java 服务系统诊断报告
@@ -633,7 +650,7 @@ diagnose_memory() {
 
     print_subsection "OOM Killer 历史记录检查"
     if command -v dmesg &>/dev/null; then
-        local oom_count; oom_count=$(dmesg 2>/dev/null | grep -ci 'out of memory\|oom-killer\|killed process' || echo 0)
+        local oom_count; oom_count=$(dmesg 2>/dev/null | count_of -i 'out of memory\|oom-killer\|killed process')
         if [ "$oom_count" -gt 0 ] 2>/dev/null; then
             print_crit "检测到 ${oom_count} 条OOM Killer记录！系统曾因内存不足杀死进程"
             add_root_cause "OOM_KILLER" "系统发生过OOM Killer事件(${oom_count}次)" "检查被杀进程内存配置，限制单进程内存上限，增加系统内存"
@@ -716,7 +733,8 @@ diagnose_disk() {
                     ;;
                 WARN_AWAIT)
                     print_warn "磁盘 ${dev} await=${await}ms 偏高(>15ms)，响应延迟较大"
-                    if [ "$await" -gt 50 ] 2>/dev/null; then
+                    # await 为小数，[ ] 不支持浮点比较，用 awk 判断
+                    if awk -v a="$await" 'BEGIN{exit !(a>50)}'; then
                         add_root_cause "IO_BOTTLENECK" "磁盘响应延迟高(${dev} await=${await}ms)" "检查磁盘健康状态，考虑使用SSD"
                     fi
                     ;;
@@ -727,7 +745,7 @@ diagnose_disk() {
     fi
 
     print_subsection "D状态(不可中断睡眠)进程检查"
-    local d_state_count; d_state_count=$(ps -eo state 2>/dev/null | grep -c '^D' || echo 0)
+    local d_state_count; d_state_count=$(ps -eo state 2>/dev/null | count_of '^D')
     if [ "$d_state_count" -gt 0 ] 2>/dev/null; then
         print_warn "检测到 ${d_state_count} 个D状态进程(不可中断I/O等待)"
         add_root_cause "IO_BOTTLENECK" "存在D状态进程(${d_state_count}个)" "检查磁盘I/O瓶颈和硬件问题"
@@ -1029,10 +1047,10 @@ diagnose_single_jvm() {
 
             # 线程状态统计
             local runnable blocked waiting timed_waiting total_threads deadlocked
-            runnable=$(echo "$jstack_output" | grep -c 'java.lang.Thread.State: RUNNABLE' || echo 0)
-            blocked=$(echo "$jstack_output" | grep -c 'java.lang.Thread.State: BLOCKED' || echo 0)
-            waiting=$(echo "$jstack_output" | grep -c 'java.lang.Thread.State: WAITING' || echo 0)
-            timed_waiting=$(echo "$jstack_output" | grep -c 'java.lang.Thread.State: TIMED_WAITING' || echo 0)
+            runnable=$(echo "$jstack_output" | count_of 'java.lang.Thread.State: RUNNABLE')
+            blocked=$(echo "$jstack_output" | count_of 'java.lang.Thread.State: BLOCKED')
+            waiting=$(echo "$jstack_output" | count_of 'java.lang.Thread.State: WAITING')
+            timed_waiting=$(echo "$jstack_output" | count_of 'java.lang.Thread.State: TIMED_WAITING')
             total_threads=$((runnable + blocked + waiting + timed_waiting))
             printf "  %-25s %s\n" "RUNNABLE (运行中):" "$runnable"
             printf "  %-25s %s\n" "BLOCKED (阻塞):" "$blocked"
@@ -1526,6 +1544,10 @@ select_java_pid_for_cpu() {
     read -r -p "请输入序号 [0-$((i-1))]: " choice
     if [ "$choice" = "0" ] || [ -z "$choice" ]; then
         return 0
+    fi
+    if ! [[ "$choice" =~ ^[0-9]+$ ]]; then
+        echo "无效输入: $choice"
+        return 1
     fi
     if [ -n "${array[choice]}" ]; then
         local sel_pid="${array[choice]}"

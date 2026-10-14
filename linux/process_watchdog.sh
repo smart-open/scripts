@@ -23,14 +23,20 @@ alert() {
     local msg="$1"
     log "[ALERT] $msg"
     if [ -n "$ALERT_EMAIL" ]; then
-        echo "$msg" | mail -s "Watchdog Alert: $msg" "$ALERT_EMAIL"
+        if command -v mail >/dev/null 2>&1; then
+            echo "$msg" | mail -s "Watchdog Alert: $msg" "$ALERT_EMAIL"
+        else
+            log "[WARNING] mail command not available, alert not sent: $msg"
+        fi
     fi
 }
 
 is_process_running() {
     local proc="$1"
-    # 多种检测方式，提高兼容性
-    pgrep -f "$proc" > /dev/null 2>&1 && return 0
+    # pgrep -f 会匹配到 watchdog 自身命令行中的进程名，需排除自身 PID
+    if pgrep -f "$proc" 2>/dev/null | grep -qv "^$$\$"; then
+        return 0
+    fi
     pidof "$proc" > /dev/null 2>&1 && return 0
     systemctl is-active --quiet "$proc" 2>/dev/null && return 0
     return 1
@@ -58,9 +64,12 @@ restart_process() {
         fi
     fi
     
-    # 方式3: 直接启动
-    pkill -f "$proc" 2>/dev/null
+    # 方式3: 直接启动（kill 残留旧实例时排除自身，避免误杀 watchdog）
+    for pid in $(pgrep -f "$proc" 2>/dev/null); do
+        [ "$pid" != "$$" ] && kill "$pid" 2>/dev/null
+    done
     sleep 1
+    log "[WARNING] No service unit found, starting '$proc' directly (not supervised)"
     nohup "$proc" > /dev/null 2>&1 &
     sleep 2
     
@@ -116,16 +125,25 @@ show_status() {
     echo "=========================================="
 }
 
+SHOW_STATUS=false
+
 while getopts "c:i:e:lsh" opt; do
     case $opt in
         c) PROCESSES+=("$OPTARG") ;;
         i) CHECK_INTERVAL="$OPTARG" ;;
         e) ALERT_EMAIL="$OPTARG" ;;
         l) load_config ;;
-        s) show_status; exit 0 ;;
+        s) SHOW_STATUS=true ;;
         h) echo "Usage: $0 [-c process] [-i interval] [-e email] [-l load_config] [-s status]"; exit 0 ;;
+        \?) echo "Unknown option: -$OPTARG. Use -h for help."; exit 2 ;;
     esac
 done
+
+# -s 需在所有参数解析完（含 -l 加载配置）后再执行，否则状态为空
+if [ "$SHOW_STATUS" = true ]; then
+    show_status
+    exit 0
+fi
 
 if [ ${#PROCESSES[@]} -eq 0 ]; then
     echo "No processes to monitor. Use -c or -l to load config."

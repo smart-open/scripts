@@ -216,19 +216,14 @@ scan_journal() {
         return
     fi
     
-    local priority_filter=""
-    case "$time_filter" in
-        *hour*) priority_filter="--since=-1hour" ;;
-        *day*) priority_filter="--since=-1day" ;;
-        *week*) priority_filter="--since=-7days" ;;
-        *) priority_filter="--since=-1day" ;;
-    esac
-    
+    local priority_filter="--since=-${TIME_PERIOD}"
+
     # 使用wc -l而不是grep -c ""，避免空匹配问题
-    local emergency=$(journalctl $priority_filter -p 0 --no-pager 2>/dev/null | wc -l)
-    local alert=$(journalctl $priority_filter -p 1 --no-pager 2>/dev/null | wc -l)
-    local critical=$(journalctl $priority_filter -p 2 --no-pager 2>/dev/null | wc -l)
-    local errors=$(journalctl $priority_filter -p 3 --no-pager 2>/dev/null | wc -l)
+    # -p N..N 限定单一级别，避免与高级别重复计数
+    local emergency=$(journalctl $priority_filter -p 0..0 --no-pager 2>/dev/null | wc -l)
+    local alert=$(journalctl $priority_filter -p 1..1 --no-pager 2>/dev/null | wc -l)
+    local critical=$(journalctl $priority_filter -p 2..2 --no-pager 2>/dev/null | wc -l)
+    local errors=$(journalctl $priority_filter -p 3..3 --no-pager 2>/dev/null | wc -l)
     
     ERROR_SUMMARY["Journal_Emergency"]=$emergency
     ERROR_SUMMARY["Journal_Alert"]=$alert
@@ -293,8 +288,9 @@ generate_summary() {
     if [ $total_errors -ge $ALERT_THRESHOLD ]; then
         echo -e "${RED}ALERT: Error count exceeds threshold ($ALERT_THRESHOLD)!${NC}" | tee -a "$REPORT_FILE"
     fi
-    
-    return $total_errors
+
+    TOTAL_ERRORS=$total_errors
+    return 0
 }
 
 send_email_alert() {
@@ -306,10 +302,10 @@ send_email_alert() {
     fi
     
     if command -v mail >/dev/null 2>&1; then
-        cat "$REPORT_FILE" | mail -s "$subject" "$ALERT_EMAIL"
+        mail -s "$subject" "$ALERT_EMAIL" < "$REPORT_FILE"
         log "Alert email sent to: $ALERT_EMAIL"
     elif command -v sendmail >/dev/null 2>&1; then
-        echo "Subject: $subject\n\n$(cat "$REPORT_FILE")" | sendmail "$ALERT_EMAIL"
+        printf 'Subject: %s\n\n' "$subject" | cat - "$REPORT_FILE" | sendmail "$ALERT_EMAIL"
         log "Alert email sent to: $ALERT_EMAIL"
     else
         log "[WARNING] No mail command available to send alert"
@@ -321,8 +317,9 @@ while getopts "t:e:a:sh" opt; do
         t) TIME_PERIOD="$OPTARG" ;;
         e) ALERT_EMAIL="$OPTARG" ;;
         a) ALERT_THRESHOLD="$OPTARG" ;;
-        s) for key in "${!ERROR_SUMMARY[@]}"; do echo "$key=${ERROR_SUMMARY[$key]}"; done | sort; exit 0 ;;
-        h) echo "Usage: $0 [-t 1h|6h|12h|24h|7d|30d] [-e email] [-a alert_threshold]"; exit 0 ;;
+        s) SHOW_SUMMARY=true ;;
+        h) echo "Usage: $0 [-t 1h|6h|12h|24h|7d|30d] [-e email] [-a alert_threshold] [-s]"; exit 0 ;;
+        \?) echo "Unknown option: -$OPTARG. Use -h for help."; exit 2 ;;
     esac
 done
 
@@ -346,8 +343,14 @@ scan_apache_logs "$time_filter"
 scan_docker_logs "$time_filter"
 scan_journal "$time_filter"
 
+# -s：扫描完成后输出键值摘要（需在扫描后执行，否则结果为空）
+if [ "${SHOW_SUMMARY:-false}" = true ]; then
+    for key in "${!ERROR_SUMMARY[@]}"; do echo "$key=${ERROR_SUMMARY[$key]}"; done | sort
+    exit 0
+fi
+
 generate_summary
-total_errors=$?
+total_errors=$TOTAL_ERRORS
 
 if [ $total_errors -ge $ALERT_THRESHOLD ] && [ -n "$ALERT_EMAIL" ]; then
     send_email_alert $total_errors "ERROR ALERT: $total_errors errors detected on $(hostname)"
@@ -355,3 +358,4 @@ fi
 
 echo ""
 echo "Report saved to: $REPORT_FILE"
+exit 0

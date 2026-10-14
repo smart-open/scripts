@@ -66,9 +66,11 @@ create_incremental_backup() {
     
     if [ ! -f "$snapshot_file" ]; then
         log "Snapshot not found, creating initial full backup..."
-        create_full_backup "$source" "$dest"
-        mv "${dest}/${name}_full_${timestamp}.tar.gz" "${dest}/${name}_incr_${timestamp}.tar.gz" 2>/dev/null
-        return $?
+        local full_file
+        full_file=$(create_full_backup "$source" "$dest") || return 1
+        mv "$full_file" "${full_file/_full_/_incr_}" || return 1
+        echo "${full_file/_full_/_incr_}"
+        return 0
     fi
     
     local exclude_args=()
@@ -135,7 +137,7 @@ list_backups() {
     echo "=========================================="
 }
 
-while getopts "s:d:t:c:x:r:k:lh" opt; do
+while getopts "s:d:t:c:x:r:k:l:h" opt; do
     case $opt in
         s) SOURCE_DIR="$OPTARG" ;;
         d) DEST_DIR="$OPTARG" ;;
@@ -146,6 +148,7 @@ while getopts "s:d:t:c:x:r:k:lh" opt; do
         k) KEEP_DAYS="$OPTARG" ;;
         l) LIST_DIR="$OPTARG" ;;
         h) echo "Usage: $0 -s source -d dest [-t full|incr] [-c gzip|bzip2|xz] [-x exclude] [-r restore_file] [-k days] [-l dest]"; exit 0 ;;
+        \?) echo "Unknown option: -$OPTARG. Use -h for help."; exit 2 ;;
     esac
 done
 
@@ -170,6 +173,6 @@ case $BACKUP_TYPE in
     full) create_full_backup "$SOURCE_DIR" "$DEST_DIR" ;;
     incr|incremental) create_incremental_backup "$SOURCE_DIR" "$DEST_DIR" ;;
     *) log "[ERROR] Unknown backup type: $BACKUP_TYPE"; exit 1 ;;
-esac
+esac || exit $?
 
 cleanup_old_backups "$DEST_DIR"

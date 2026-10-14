@@ -1,7 +1,7 @@
 #!/bin/bash
 # SSH Key Management Script - Batch SSH key distribution and management
 # Author: System Admin
-# Usage: ./ssh_key_manage.sh -a add|remove|list [-k key_file] [-u user] [-h hosts_file]
+# Usage: ./ssh_key_manage.sh -a add|remove|list|generate|test|info [-k key_file] [-u user] [-h hosts_file] [-p port]
 
 VERSION="1.0"
 ACTION=""
@@ -40,10 +40,11 @@ add_key_to_host() {
     local host="$1"
     local user="$2"
     local key="$3"
-    
+
     echo "Adding key to $user@$host..."
-    
-    if ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$user@$host" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '$key' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys" 2>/dev/null; then
+
+    # key 内容通过 stdin 传递，避免拼进远程命令导致引号/注释字符注入
+    if ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$user@$host" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && cat >> ~/.ssh/authorized_keys && sort -u ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys" < "$KEY_FILE" 2>/dev/null; then
         echo -e "${GREEN}[SUCCESS]${NC} Key added to $user@$host"
         ((SUCCESS_COUNT++))
         return 0
@@ -58,11 +59,11 @@ remove_key_from_host() {
     local host="$1"
     local user="$2"
     local key="$3"
-    local key_comment=$(echo "$key" | awk '{print $3}')
-    
+
     echo "Removing key from $user@$host..."
-    
-    if ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$user@$host" "sed -i '/$key_comment/d' ~/.ssh/authorized_keys" 2>/dev/null; then
+
+    # 用固定字符串整行匹配删除，避免按注释 sed 删除（会误删同注释的所有 key，且注释含特殊字符时注入 sed 命令）
+    if ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$user@$host" "grep -v -F '$key' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.tmp && mv ~/.ssh/authorized_keys.tmp ~/.ssh/authorized_keys" < /dev/null 2>/dev/null; then
         echo -e "${GREEN}[SUCCESS]${NC} Key removed from $user@$host"
         ((SUCCESS_COUNT++))
         return 0
@@ -79,7 +80,7 @@ list_keys_on_host() {
     
     echo "Listing keys on $user@$host:"
     
-    if ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$user@$host" "cat ~/.ssh/authorized_keys" 2>/dev/null; then
+    if ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$user@$host" "cat ~/.ssh/authorized_keys" 2>/dev/null; then
         echo -e "${GREEN}[SUCCESS]${NC} Listed keys on $user@$host"
         ((SUCCESS_COUNT++))
         return 0
@@ -135,7 +136,7 @@ test_connection() {
     local host="$1"
     echo "Testing connection to $host..."
     
-    if ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$SSH_USER@$host" "echo 'Connection successful'" 2>/dev/null; then
+    if ssh -p "$SSH_PORT" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$SSH_USER@$host" "echo 'Connection successful'" 2>/dev/null; then
         echo -e "${GREEN}[SUCCESS]${NC} Connection to $SSH_USER@$host OK"
         return 0
     else

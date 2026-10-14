@@ -30,11 +30,15 @@ NET SESSION >nul 2>&1
 if %errorLevel% NEQ 0 (
     echo [提示] 正在请求管理员权限...
     powershell -Command "Start-Process '%~f0' -Verb RunAs" >nul 2>&1
+    echo [提示] 若未弹出 UAC 确认窗口或已点"否"，请右键本脚本选择"以管理员身份运行"
+    pause
     exit /b
 )
 
 :: 删除注册表中的试用标记
 echo [1/3] 正在清除试用标记...
+echo [提示] 如 Beyond Compare 正在运行，将尝试结束进程（否则退出时会回写试用标记）
+taskkill /f /im BCompare.exe >nul 2>&1
 reg delete "HKEY_CURRENT_USER\Software\Scooter Software\Beyond Compare 5" /v CacheID /f >nul 2>&1
 reg delete "HKEY_CURRENT_USER\Software\Scooter Software\Beyond Compare 4" /v CacheID /f >nul 2>&1
 echo 注册表清理完成
@@ -61,7 +65,7 @@ for %%v in (%bc_versions%) do (
 
 :: 从桌面快捷方式搜索（如果未找到）
 if not defined bc_path (
-    for %%d in ("%USERPROFILE%\Desktop" "C:\Users\Public\Desktop") do (
+    for %%d in ("%USERPROFILE%\Desktop" "%USERPROFILE%\OneDrive\Desktop" "C:\Users\Public\Desktop") do (
         if not defined bc_path (
             for %%f in ("%%~d\Beyond Compare*.lnk") do (
                 for /f "usebackq delims=" %%p in (`powershell -Command "(New-Object -ComObject WScript.Shell).CreateShortcut('%%~ff').TargetPath" 2^>nul`) do (

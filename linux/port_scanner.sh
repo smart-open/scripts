@@ -50,7 +50,11 @@ scan_udp_port() {
         nc -z -u -w "$TIMEOUT" "$host" "$port" 2>/dev/null
         return $?
     else
-        echo "netcat required for UDP scanning"
+        # 仅提示一次，避免逐端口刷屏
+        if [ "${UDP_NC_WARNED:-0}" -eq 0 ]; then
+            echo "[WARNING] netcat(nc) required for UDP scanning, results will be unreliable"
+            UDP_NC_WARNED=1
+        fi
         return 1
     fi
 }
@@ -92,6 +96,10 @@ expand_port_range() {
 scan_host() {
     local host="$1"
     local ports=($(expand_port_range "$PORT_RANGE"))
+    if [ ${#ports[@]} -eq 0 ]; then
+        echo "[ERROR] Invalid port range: $PORT_RANGE (expected N or N-M)"
+        exit 1
+    fi
     local open_ports=()
     local total_ports=${#ports[@]}
     local current=0
@@ -111,13 +119,14 @@ scan_host() {
     for port in "${ports[@]}"; do
         ((current++))
         
+        local opened=1
         if [ "$SCAN_TYPE" = "tcp" ]; then
-            scan_tcp_port "$host" "$port"
+            scan_tcp_port "$host" "$port" && opened=0
         else
-            scan_udp_port "$host" "$port"
+            scan_udp_port "$host" "$port" && opened=0
         fi
-        
-        if [ $? -eq 0 ]; then
+
+        if [ $opened -eq 0 ]; then
             local service=$(get_service_name "$port")
             open_ports+=("$port/$service")
             log "OPEN $SCAN_TYPE port $port on $host ($service)"
@@ -155,17 +164,24 @@ scan_host() {
 
 ping_sweep() {
     local subnet="$1"
+    # 仅支持 x.x.x.0 形式的网段（不支持 CIDR）
+    if ! echo "$subnet" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+\.0$"; then
+        echo "[ERROR] Invalid subnet: $subnet (expected format: 192.168.1.0, CIDR not supported)"
+        exit 1
+    fi
     echo "=========================================="
     echo "Ping Sweep: $subnet"
     echo "=========================================="
-    
+
     local alive=0
     for i in {1..254}; do
         local ip="${subnet%.0}.$i"
         if ping -c 1 -W 1 "$ip" >/dev/null 2>&1; then
-            hostname=$(nslookup "$ip" 2>/dev/null | grep "name =" | awk '{print $4}' | head -1 | sed 's/\.$//')
-            if [ -n "$hostname" ]; then
-                echo -e "${GREEN}[ALIVE]${NC} $ip ($hostname)"
+            local resolved_name
+            resolved_name=$(getent hosts "$ip" 2>/dev/null | awk '{print $2}' | head -1)
+            [ -z "$resolved_name" ] && resolved_name=$(nslookup "$ip" 2>/dev/null | grep "name =" | awk '{print $4}' | head -1 | sed 's/\.$//')
+            if [ -n "$resolved_name" ]; then
+                echo -e "${GREEN}[ALIVE]${NC} $ip ($resolved_name)"
             else
                 echo -e "${GREEN}[ALIVE]${NC} $ip"
             fi
@@ -201,9 +217,15 @@ while getopts "t:p:T:o:s:dh" opt; do
         o) TIMEOUT="$OPTARG" ;;
         s) SUBNET="$OPTARG" ;;
         d) SERVICE_DISCOVERY=true ;;
-        h) echo "Usage: $0 -t target [-p port_range] [-T tcp|udp] [-o timeout] [-s subnet] [-d]"; exit 0 ;;
+        h) echo "Usage: $0 -t target [-p port_range] [-T tcp|udp] [-o timeout] | -s subnet [-d]"; exit 0 ;;
+        \?) echo "Unknown option: -$OPTARG. Use -h for help."; exit 2 ;;
     esac
 done
+
+if [ -n "$SUBNET" ] && [ -n "$TARGET" ]; then
+    echo "[ERROR] -s and -t are mutually exclusive"
+    exit 2
+fi
 
 if [ -n "$SUBNET" ]; then
     ping_sweep "$SUBNET"
