@@ -1,0 +1,14 @@
+# 行尾策略：仓库内一律以 LF 存储；检出时按目标平台决定。
+# 覆盖全局 core.autocrlf=true（否则 Linux 的 .sh 会被转成 CRLF，
+# 在 Linux 上 shebang 变成 "#!/bin/bash\r" 直接报 bad interpreter）。
+
+# Linux shell 脚本：强制 LF
+*.sh text eol=lf
+
+# Windows 脚本：强制 CRLF
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 文档：保持 LF
+*.md text eol=lf
