@@ -7,7 +7,7 @@
 | 脚本 | 功能 | 使用场景 |
 |------|------|---------|
 | **docker_install.sh** | 自动安装最新版 Docker Engine + Compose | 新服务器初始化 |
-| **docker_compose_deploy.sh** | 一键部署 28+ 基础设施组件 | 开发/测试环境搭建 |
+| **docker_compose_deploy.sh** | 一键部署 29 个基础设施组件 | 开发/测试环境搭建 |
 | **docker_cleaner.sh** | Docker 资源清理工具 | 定期维护 |
 
 ## 快速开始
@@ -72,7 +72,7 @@ docker compose version
 ./docker_cleaner.sh -s
 ```
 
-## 支持的组件 (28个)
+## 支持的组件 (29个)
 
 | 类别 | 组件 | 版本 |
 |------|------|------|

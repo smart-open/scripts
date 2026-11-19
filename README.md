@@ -7,6 +7,7 @@
 ```
 scripts/
 ├── README.md                    # 主说明文档
+├── .gitattributes               # 行尾策略（.sh=LF / .ps1/.bat/.cmd=CRLF）
 ├── .gitignore                   # Git忽略文件
 ├── LICENSE                      # 开源协议
 │
@@ -24,6 +25,7 @@ scripts/
     ├── system_monitor.sh                  # 实时系统监控
     ├── process_watchdog.sh                # 进程守护
     ├── io_monitor.sh                      # 磁盘I/O监控
+    ├── monitor_dog.sh                     # 终端围栏小狗（指标越阈值吠叫告警）
     ├── backup_manager.sh                  # 备份管理器
     ├── db_backup.sh                       # 数据库备份
     ├── security_audit.sh                  # 安全审计
@@ -38,7 +40,7 @@ scripts/
     │
     └── docker/                            # Docker 工具脚本
         ├── docker_install.sh              # Docker自动安装
-        ├── docker_compose_deploy.sh       # 基础设施一键部署(28+组件)
+        ├── docker_compose_deploy.sh       # 基础设施一键部署(29组件)
         ├── docker_cleaner.sh              # Docker资源清理
         ├── DEPLOYMENT_GUIDE.md            # 详细部署操作手册
         └── README.md                      # Docker脚本说明
@@ -62,7 +64,7 @@ cd windows/tools
 
 | 类别 | 命令 |
 |------|------|
-| 文件操作 | ls, ll, cat, head, tail, more, less, touch, rm, cp, mv, mkdir, pwd, find, tree, which |
+| 文件操作 | ls, ll, cat, head, tail, more, less, touch, rm, cp, mv, mkdir, pwd, find, tree, which, open, diff |
 | 文本处理 | grep, awk, sort, uniq, cut, tr, wc, tee, xargs, basename, dirname, realpath |
 | 系统信息 | df, du, free, uptime, ps, top, htop, kill, whoami, hostname, date, env, cal |
 | 网络工具 | ip, ifconfig, netstat, ss, dig, nc, traceroute |
@@ -138,11 +140,11 @@ Windows系统一键优化脚本，右键以管理员身份运行。支持3级优
 
 ## Linux 脚本
 
-### 系统运维脚本 (14个)
+### 系统运维脚本 (15个)
 
 | 类别 | 脚本 | 功能 |
 |------|------|------|
-| 系统监控 | system_monitor.sh, process_watchdog.sh, io_monitor.sh | CPU/内存/磁盘/进程/I/O 实时监控 |
+| 系统监控 | system_monitor.sh, process_watchdog.sh, io_monitor.sh, monitor_dog.sh | CPU/内存/磁盘/进程/I/O 实时监控, 终端动画看门狗 |
 | 备份恢复 | backup_manager.sh, db_backup.sh | 全量/增量备份, MySQL/PostgreSQL备份 |
 | 安全审计 | security_audit.sh, ssh_key_manage.sh, sudo_audit.sh | 端口/SUID/权限/SSH/sudo审计 |
 | 网络工具 | port_scanner.sh | TCP/UDP端口扫描, Ping Sweep |
@@ -153,7 +155,7 @@ Windows系统一键优化脚本，右键以管理员身份运行。支持3级优
 
 ### Docker 基础设施部署 (linux/docker/)
 
-**一键部署 26+ 开发测试基础设施组件，支持单机和集群模式。**
+**一键部署 29 个开发测试基础设施组件，支持单机和集群模式。**
 
 #### 快速开始
 
@@ -170,7 +172,7 @@ sudo ./docker_install.sh -y --mirror china
 ./docker_compose_deploy.sh info
 ```
 
-#### 支持的组件 (28个，2026年8月最新稳定版)
+#### 支持的组件 (29个，2026年8月最新稳定版)
 
 | 类别 | 组件 | 版本 | 集群模式 |
 |------|------|------|---------|
@@ -223,6 +225,9 @@ cd windows/tools
 ```bash
 # 系统监控
 ./linux/system_monitor.sh -i 2 -t 80
+
+# 终端围栏小狗（CPU/内存/磁盘/Swap/Load 越阈值时站定吠叫告警）
+bash linux/monitor_dog.sh -i 2 -a 80
 
 # 安全审计
 sudo ./linux/security_audit.sh

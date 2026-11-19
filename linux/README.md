@@ -1,6 +1,6 @@
 # Linux 实用脚本集合
 
-本目录包含17个运维实用脚本，涵盖系统监控、备份、安全审计、部署管理、Docker基础设施等多个领域。
+本目录包含18个运维实用脚本，涵盖系统监控、备份、安全审计、部署管理、Docker基础设施等多个领域。
 
 ---
 
@@ -13,6 +13,7 @@
 | **system_monitor.sh** | 实时系统监控 | CPU/内存/磁盘监控、阈值告警、进程排名 |
 | **process_watchdog.sh** | 进程守护监控 | 异常自动重启、邮件告警、多进程监控 |
 | **io_monitor.sh** | 磁盘I/O监控 | 读写速度统计、Top I/O进程、阈值告警 |
+| **monitor_dog.sh** | 终端围栏小狗 | 动画看门狗：指标越阈值站定吠叫播报、恢复播报警报解除、无告警时打盹/搞怪特效 |
 
 ### 💾 备份恢复类
 
@@ -34,7 +35,6 @@
 | 脚本 | 功能 | 主要特性 |
 |------|------|---------|
 | **port_scanner.sh** | 端口扫描器 | TCP/UDP扫描、服务发现、Ping Sweep |
-| **traceroute.sh** | 路由追踪 | 节点检测、延迟统计 |
 
 ### 🐳 Docker相关
 
@@ -66,7 +66,7 @@
 | 脚本 | 功能 | 主要特性 |
 |------|------|---------|
 | **docker/docker_install.sh** | Docker自动安装 | CentOS/Ubuntu自动检测、最新版安装、中国镜像源支持 |
-| **docker/docker_compose_deploy.sh** | 基础设施一键部署 | 26+组件模板(含RustFS)、单机/集群模式(15种HA)、8种预设方案、统一数据卷管理 |
+| **docker/docker_compose_deploy.sh** | 基础设施一键部署 | 29组件模板(含RustFS)、单机/集群模式(15种HA)、9种预设方案、统一数据卷管理 |
 | **docker/docker_cleaner.sh** | Docker资源清理 | 容器/镜像/卷/网络清理、磁盘使用统计 |
 | **docker/DEPLOYMENT_GUIDE.md** | 详细部署操作手册 | 完整安装/部署/使用/运维/故障排查文档 |
 
@@ -119,6 +119,27 @@ chmod +x *.sh
 # 查看监控状态
 ./process_watchdog.sh -s
 ```
+
+---
+
+### monitor_dog.sh
+终端围栏小狗：CPU/内存/磁盘/Swap/Load 任一越阈值时站定吠叫并播报指标与数值，全部恢复后播报警报解除。纯 bash + coreutils，不需要 root。
+
+```bash
+# 默认：2秒采样，阈值80%
+bash monitor_dog.sh
+
+# 自定义阈值与采样周期，并写日志
+bash monitor_dog.sh -i 2 -a 85 --log
+
+# 固定模拟快照（无需等待真实负载）
+bash monitor_dog.sh --simulate 'cpu=95 mem=20 disk=30 swap=0 load=1.0' --frames 20
+
+# 静音、无色、逐帧追加输出
+bash monitor_dog.sh --no-sound --no-color --no-clear
+```
+
+主要选项：`-i` 采样周期、`-a` 百分比阈值、`--load-threshold` 负载阈值、`--bark-interval` 告警重复播报间隔、`--simulate` / `--simulate-file` 模拟快照、`--frames` 帧数、`--log` 日志、`--no-sound/--no-color/--no-clear`。终端建议宽度 ≥ 82 列。
 
 ---
 
@@ -299,7 +320,7 @@ sudo ./docker_install.sh
 ---
 
 ### docker/docker_compose_deploy.sh
-通过Docker Compose一键部署26+基础设施组件（含RustFS）
+通过Docker Compose一键部署29个基础设施组件（含RustFS）
 
 ```bash
 cd docker/
@@ -349,19 +370,21 @@ cd docker/
 - `f. all-mq`: rabbitmq, kafka, rocketmq, zookeeper, pulsar
 - `g. storage`: minio, rustfs
 - `h. cluster-mq`: kafka:cluster, rabbitmq:cluster, rocketmq:cluster
+- `i. monitoring-full`: prometheus, alertmanager, grafana, loki, promtail
 
-**支持的组件（26个）：**
+**支持的组件（29个）：**
 
 | 类别 | 组件 | 版本 |
 |------|------|------|
 | 数据库 | Redis, MySQL, PostgreSQL, MongoDB | 8.0, 8.4 LTS, 17, 8.0 |
+| 向量库 | pgvector | 0.8 (PG 17) |
 | 搜索 | Elasticsearch, OpenSearch | 8.19, 2.19 |
 | 存储 | MinIO, RustFS | RELEASE.2025-10-15, 1.0.0-alpha.69 |
 | 消息队列 | RabbitMQ, Kafka, RocketMQ, Pulsar | 4.3, 8.3 (KRaft), 5.5, 4.2 |
 | 协调 | ZooKeeper | 3.9 |
 | 网关 | OpenResty, Kong | 1.27, 3.9 |
-| 监控 | Prometheus, Grafana, Loki, SkyWalking | 3.13, 12.4, 3.7, 10.4 |
-| 日志 | Logstash, Kibana | 8.19 |
+| 监控 | Prometheus, Alertmanager, Grafana, Loki, SkyWalking | 3.13, 0.29, 12.4, 3.7, 10.4 |
+| 日志 | Logstash, Kibana, Promtail | 8.19, 3.7 |
 | 安全 | Keycloak, Sentinel | 26.6, 1.8 |
 | 调度 | XXL-Job, PowerJob | 3.4, 5.1 |
 | 注册中心 | Nacos | 3.2 |
@@ -422,7 +445,7 @@ cd docker/
 ## 版本信息
 
 - Scripts Version: 1.0
-- Last Updated: 2024
+- Last Updated: 2026-11
 - Author: System Admin Team
 
 ---
